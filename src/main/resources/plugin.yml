@@ -1,0 +1,80 @@
+name: EventTools
+version: '1.0'
+main: net.mattwhyy.eventTools.EventTools
+api-version: '1.16'
+authors: [ mattwhyy ]
+commands:
+  eliminate:
+    description: Eliminate a player from the event
+    usage: /eliminate <player|all>
+  revive:
+    description: Revive an eliminated player
+    usage: /revive <player|all>
+  seteventspawn:
+    description: Set the event revival spawn point
+    usage: /seteventspawn
+  startevent:
+    description: Start the elimination event
+    usage: /startevent
+  stopevent:
+    description: Stop the elimination event
+    usage: /stopevent
+
+  # Player Management
+  bring:
+    description: Teleport players to your location
+    usage: /bring <player|all|alive|eliminated>
+  heal:
+    description: Heal players
+    usage: /heal <player|all|alive|eliminated>
+  freeze:
+    description: Freeze player movement
+    usage: /freeze <player|all|alive|eliminated>
+  timedeffect:
+    description: Apply timed potion effects
+    usage: /timedeffect <effect> <seconds> <player|all|alive|eliminated>
+
+  # Inventory Control
+  giveitem:
+    description: Give held item to players
+    usage: /giveitem <player|all|alive|eliminated> [amount]
+  clearinventory:
+    description: Clear player inventories
+    usage: /clearinventory <player|all|alive|eliminated>
+
+  # Information
+  list:
+    description: List players by status
+    usage: /list <alive|eliminated|all>
+
+  # Chat Control
+  mutechat:
+    description: Toggle chat muting
+    usage: /mutechat
+  clearchat:
+    description: Clear the chat for all players
+    usage: /clearchat
+
+  # Voting System
+  startvote:
+    description: Start a yes/no vote
+    usage: /startvote <question>
+  endvote:
+    description: End the current vote early
+    usage: /endvote
+
+  # Game Features
+  numberguess:
+    description: Start a number guessing game
+    usage: /numberguess <maxNumber>
+  countdown:
+    description: Start a visual countdown
+    usage: /countdown <seconds>
+
+permissions:
+  eventtools.admin:
+    description: Allows use of all event commands
+    default: op
+  eventtools.bypass:
+    description: Bypasses all event mechanics
+    default: op
