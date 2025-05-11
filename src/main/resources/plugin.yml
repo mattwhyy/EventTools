@@ -6,7 +6,7 @@ authors: [ mattwhyy ]
 dependencies:
   server:
     PlaceholderAPI:
-      load: BEFORE #
+      load: BEFORE
       required: false
 commands:
   eliminate:

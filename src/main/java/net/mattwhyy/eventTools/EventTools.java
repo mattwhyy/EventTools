@@ -709,7 +709,7 @@ public final class EventTools extends JavaPlugin implements Listener {
 
                     timeLeft--;
                 }
-            }.runTaskTimer(this, 0, 20); // Runs every second (20 ticks)
+            }.runTaskTimer(this, 0, 20);
         } catch (NumberFormatException e) {
             sendMessage(sender, "&cInvalid number! Use a whole number (e.g. 10)");
         }
