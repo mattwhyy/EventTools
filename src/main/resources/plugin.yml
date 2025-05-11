@@ -3,6 +3,11 @@ version: '1.01'
 main: net.mattwhyy.eventTools.EventTools
 api-version: '1.16'
 authors: [ mattwhyy ]
+dependencies:
+  server:
+    PlaceholderAPI:
+      load: BEFORE #
+      required: false
 commands:
   eliminate:
     description: Eliminate a player from the event
@@ -35,6 +40,9 @@ commands:
     usage: /timedeffect <effect> <seconds> <player|all|alive|eliminated>
 
   # Inventory Control
+  invsee:
+    description: View the inventory of a player
+    usage: /invsee <player>
   giveitem:
     description: Give held item to players
     usage: /giveitem <player|all|alive|eliminated> [amount]

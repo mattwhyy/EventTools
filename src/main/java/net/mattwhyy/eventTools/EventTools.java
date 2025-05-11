@@ -27,21 +27,24 @@ import java.util.stream.Collectors;
 
 public final class EventTools extends JavaPlugin implements Listener {
 
-    private final Set<UUID> eliminatedPlayers = ConcurrentHashMap.newKeySet();
+    private EventToolsExpansion expansion;
+
+    final Set<UUID> eliminatedPlayers = ConcurrentHashMap.newKeySet();
     private final Set<UUID> disconnectedPlayers = ConcurrentHashMap.newKeySet();
-    private final List<UUID> eliminationOrder = Collections.synchronizedList(new ArrayList<>());
-    private final Map<UUID, Boolean> votes = new ConcurrentHashMap<>();
+    final List<UUID> eliminationOrder = Collections.synchronizedList(new ArrayList<>());
+    final Map<UUID, Boolean> votes = new ConcurrentHashMap<>();
 
     private Location spawnLocation;
-    private volatile boolean eventActive = false;
+    volatile boolean eventActive = false;
     private volatile boolean chatMuted = false;
     private volatile boolean numberGuessActive = false;
     private volatile int targetNumber;
     private volatile UUID numberGuessWinner = null;
-    private volatile boolean voteInProgress = false;
-    private volatile String currentVoteQuestion;
+    volatile boolean voteInProgress = false;
+    volatile String currentVoteQuestion;
     private volatile BukkitTask voteTask;
-    private volatile int voteTimeRemaining;
+    volatile int voteTimeRemaining;
+    long eventStartTime;
 
     private FileConfiguration config;
 
@@ -52,13 +55,17 @@ public final class EventTools extends JavaPlugin implements Listener {
         getLogger().info("EventTools has been enabled!");
         registerCommands();
         getServer().getPluginManager().registerEvents(this, this);
+        if (Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI")) {
+            this.expansion = new EventToolsExpansion(this);
+            this.expansion.register();
+        }
     }
 
     private void registerCommands() {
         Arrays.asList(
                 "eliminate", "revive", "seteventspawn", "startevent", "stopevent",
                 "bring", "heal", "list", "mutechat", "clearchat", "freeze",
-                "timedeffect", "startvote", "endvote", "countdown", "numberguess",
+                "timedeffect", "invsee", "startvote", "endvote", "countdown", "numberguess",
                 "giveitem", "clearinventory"
         ).forEach(cmd -> getCommand(cmd).setExecutor(this));
     }
@@ -66,6 +73,9 @@ public final class EventTools extends JavaPlugin implements Listener {
     @Override
     public void onDisable() {
         cleanupTasks();
+        if (this.expansion != null) {
+            this.expansion.unregister();
+        }
         getLogger().info("EventTools has been disabled!");
     }
 
@@ -97,6 +107,7 @@ public final class EventTools extends JavaPlugin implements Listener {
                 case "list": return handleListCommand(sender, args);
                 case "freeze": return handleFreeze(sender, args);
                 case "timedeffect": return handleTimedEffect(sender, args);
+                case "invsee": return handleInvSee(sender, args);
                 case "startvote": return handleStartVote(sender, args);
                 case "endvote": return handleEndVote(sender);
                 case "countdown": return handleCountdown(sender, args);
@@ -137,6 +148,7 @@ public final class EventTools extends JavaPlugin implements Listener {
 
         resetEvent();
         eventActive = true;
+        eventStartTime = System.currentTimeMillis();
         Bukkit.getOnlinePlayers().forEach(player -> {
             player.playSound(
                     player.getLocation(),
@@ -164,6 +176,7 @@ public final class EventTools extends JavaPlugin implements Listener {
                 config.getString("messages.event-end-subtitle", "§7Thanks for playing!")
         );
         resetEvent();
+        eventStartTime = 0;
         broadcastMessage(config.getString("messages.event-ended", "&a&lEVENT ENDED!"));
         return true;
     }
@@ -204,9 +217,10 @@ public final class EventTools extends JavaPlugin implements Listener {
             return true;
         }
 
-        sendMessage(sender, String.format("&aBrought %d %s to you!",
-                brought,
-                target.matches("all|alive|eliminated") ? "players" : "player"));
+        String targetName = target.matches("all|alive|eliminated") ?
+                brought + " player" + (brought != 1 ? "s" : "") :
+                Bukkit.getPlayer(args[0]) != null ? Bukkit.getPlayer(args[0]).getName() : "target";
+        sendMessage(sender, String.format("&aBrought %s to you!", targetName));
         return true;
     }
 
@@ -241,9 +255,10 @@ public final class EventTools extends JavaPlugin implements Listener {
             return true;
         }
 
-        sendMessage(sender, String.format("&aHealed %d %s!",
-                healed,
-                target.matches("all|alive|eliminated") ? "players" : "player"));
+        String targetName = target.matches("all|alive|eliminated") ?
+                healed + " player" + (healed != 1 ? "s" : "") :
+                Bukkit.getPlayer(args[0]) != null ? Bukkit.getPlayer(args[0]).getName() : "target";
+        sendMessage(sender, String.format("&aHealed %s!", targetName));
         return true;
     }
 
@@ -293,9 +308,10 @@ public final class EventTools extends JavaPlugin implements Listener {
             return true;
         }
 
-        sendMessage(sender, String.format("&aGave item to %d %s!",
-                given,
-                target.matches("all|alive|eliminated") ? "players" : "player"));
+        String targetName = target.matches("all|alive|eliminated") ?
+                given + " player" + (given != 1 ? "s" : "") :
+                Bukkit.getPlayer(args[0]) != null ? Bukkit.getPlayer(args[0]).getName() : "target";
+        sendMessage(sender, String.format("&aGave item to %s!", targetName));
         return true;
     }
 
@@ -330,9 +346,10 @@ public final class EventTools extends JavaPlugin implements Listener {
             return true;
         }
 
-        sendMessage(sender, String.format("&aCleared inventory of %d %s!",
-                cleared,
-                target.matches("all|alive|eliminated") ? "players" : "player"));
+        String targetName = target.matches("all|alive|eliminated") ?
+                cleared + " player" + (cleared != 1 ? "s" : "") :
+                Bukkit.getPlayer(args[0]) != null ? Bukkit.getPlayer(args[0]).getName() : "target";
+        sendMessage(sender, String.format("&aCleared inventory of %s!", targetName));
         return true;
     }
 
@@ -465,33 +482,40 @@ public final class EventTools extends JavaPlugin implements Listener {
             return true;
         }
 
-        int frozen = 0;
+        int affected = 0;
         String target = args[0].toLowerCase();
 
         for (Player player : Bukkit.getOnlinePlayers()) {
             if (player.equals(sender)) continue;
 
-            boolean shouldFreeze = switch (target) {
+            boolean shouldAffect = switch (target) {
                 case "all" -> true;
                 case "alive" -> !isEliminated(player);
                 case "eliminated" -> isEliminated(player);
                 default -> player.getName().equalsIgnoreCase(args[0]);
             };
 
-            if (shouldFreeze) {
-                freezePlayer(player, true);
-                frozen++;
+            if (shouldAffect) {
+                boolean currentlyFrozen = player.getWalkSpeed() == 0;
+                freezePlayer(player, !currentlyFrozen);
+                affected++;
             }
         }
 
-        if (frozen == 0 && !target.matches("all|alive|eliminated")) {
+        if (affected == 0 && !target.matches("all|alive|eliminated")) {
             sendMessage(sender, "&cPlayer not found!");
             return true;
         }
 
-        sendMessage(sender, String.format("&aFroze %d %s!",
-                frozen,
-                target.matches("all|alive|eliminated") ? "players" : "player"));
+        String targetName = target.matches("all|alive|eliminated") ?
+                affected + " player" + (affected != 1 ? "s" : "") :
+                Bukkit.getPlayer(args[0]) != null ? Bukkit.getPlayer(args[0]).getName() : "target";
+
+        boolean anyFrozen = Bukkit.getOnlinePlayers().stream()
+                .anyMatch(p -> p.getWalkSpeed() == 0);
+        String action = anyFrozen ? "Froze" : "Unfroze";
+
+        sendMessage(sender, String.format("&a%s %s!", action, targetName));
         return true;
     }
 
@@ -530,13 +554,42 @@ public final class EventTools extends JavaPlugin implements Listener {
                 return true;
             }
 
-            sendMessage(sender, String.format("&aApplied %s to %d %s!",
-                    type.getName(),
-                    applied,
-                    target.matches("all|alive|eliminated") ? "players" : "player"));
+            String targetName;
+            if (target.matches("all|alive|eliminated")) {
+                targetName = applied + " player" + (applied != 1 ? "s" : "");
+            } else {
+                Player targetPlayer = Bukkit.getPlayer(args[2]);
+                targetName = targetPlayer != null ? targetPlayer.getName() : "unknown player";
+            }
+
+            sendMessage(sender, String.format("&aApplied %s to %s!", type.getName(), targetName));
         } catch (Exception e) {
             sendMessage(sender, "&cInvalid effect or duration! Example: /timedeffect speed 30 all");
         }
+        return true;
+    }
+
+    private boolean handleInvSee(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player)) {
+            sendMessage(sender, "&cOnly players can use this command!");
+            return true;
+        }
+
+        if (args.length != 1) {
+            sendMessage(sender, "&cUsage: /invsee <player>");
+            return true;
+        }
+
+        Player admin = (Player) sender;
+        Player target = Bukkit.getPlayer(args[0]);
+
+        if (target == null || target.equals(admin)) {
+            sendMessage(sender, "&cInvalid player!");
+            return true;
+        }
+
+        admin.openInventory(target.getInventory());
+        sendMessage(sender, "&aViewing " + target.getName() + "'s inventory");
         return true;
     }
 
@@ -682,7 +735,7 @@ public final class EventTools extends JavaPlugin implements Listener {
         }
     }
 
-    private boolean isEliminated(Player player) {
+    boolean isEliminated(Player player) {
         return eliminatedPlayers.contains(player.getUniqueId());
     }
 
@@ -763,6 +816,9 @@ public final class EventTools extends JavaPlugin implements Listener {
         if (player.hasPermission("eventtools.bypass") || isEliminated(player)) {
             return false;
         }
+
+        player.getWorld().spawnParticle(Particle.EXPLOSION_LARGE, player.getLocation(), 1);
+        player.getWorld().playSound(player.getLocation(), Sound.ENTITY_LIGHTNING_BOLT_THUNDER, 1.0f, 0.8f);
         eliminatedPlayers.add(player.getUniqueId());
         eliminationOrder.add(player.getUniqueId());
         player.setGameMode(GameMode.SPECTATOR);
@@ -911,8 +967,12 @@ public final class EventTools extends JavaPlugin implements Listener {
 
         broadcastMessage("&6&lEvent Results:");
         String[] suffixes = {"1st", "2nd", "3rd", "4th", "5th"};
+        String[] colors = {"&6", "&7", "&c", "&f", "&f"};
+        String[] icons = {"🥇 ", "🥈 ", "🥉 ", "", ""};
+
         for (int i = 0; i < Math.min(5, placements.size()); i++) {
-            broadcastMessage("&e" + suffixes[i] + ": &f" + placements.get(i).getName());
+            String placement = colors[i] + icons[i] + suffixes[i] + ": &r" + placements.get(i).getName();
+            broadcastMessage(placement);
         }
     }
 
