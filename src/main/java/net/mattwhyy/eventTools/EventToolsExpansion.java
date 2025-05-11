@@ -72,7 +72,6 @@ public class EventToolsExpansion extends PlaceholderExpansion {
                 long elapsed = System.currentTimeMillis() - plugin.eventStartTime;
                 return formatDuration(elapsed);
 
-            // Voting placeholders
             case "vote_time_left":
                 if (!plugin.voteInProgress) return "No vote";
                 return plugin.voteTimeRemaining + "s";
@@ -90,6 +89,10 @@ public class EventToolsExpansion extends PlaceholderExpansion {
                 long no = plugin.votes.size() - yes;
                 if (yes == no) return "Tie";
                 return yes > no ? "YES" : "NO";
+
+            case "event_title":
+                return !plugin.eventActive ? "None" :
+                        (plugin.eventTitle != null ? plugin.eventTitle : "Event");
 
             default:
                 return null;

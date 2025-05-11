@@ -1,5 +1,5 @@
 name: EventTools
-version: '1.01'
+version: '1.02'
 main: net.mattwhyy.eventTools.EventTools
 api-version: '1.16'
 authors: [ mattwhyy ]
@@ -19,10 +19,10 @@ commands:
     description: Set the event revival spawn point
     usage: /seteventspawn
   startevent:
-    description: Start the elimination event
-    usage: /startevent
+    description: Start the event with an optional title
+    usage: /startevent [title]
   stopevent:
-    description: Stop the elimination event
+    description: Stop the event
     usage: /stopevent
 
   # Player Management
@@ -38,11 +38,17 @@ commands:
   timedeffect:
     description: Apply timed potion effects
     usage: /timedeffect <effect> <seconds> <player|all|alive|eliminated>
+  changegamemode:
+    description: Change the gamemode of players
+    usage: /changegamemode <gamemode> <player|all|alive|eliminated>
 
   # Inventory Control
   invsee:
     description: View the inventory of a player
     usage: /invsee <player>
+  kit:
+    description: Give a gear kit to players
+    usage: /kit <kitName> <player|all|alive|eliminated>
   giveitem:
     description: Give held item to players
     usage: /giveitem <player|all|alive|eliminated> [amount]

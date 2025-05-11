@@ -1,3 +1,5 @@
+settings:
+  elimination-gamemode: SURVIVAL  # Can be SPECTATOR, ADVENTURE, or SURVIVAL
 messages:
   event-start-title: "§6Event started!"
   event-start-subtitle: "§eGood luck!"
@@ -5,3 +7,32 @@ messages:
   event-end-title: "§aEvent ended!"
   event-end-subtitle: "§7Thanks for playing!"
   event-ended: "&a&lEVENT ENDED!"
+kits:
+  starter:
+    clear-inventory: true
+    armor:
+      helmet: "DIAMOND_HELMET"
+      chestplate: "DIAMOND_CHESTPLATE"
+      leggings: "DIAMOND_LEGGINGS"
+      boots: "DIAMOND_BOOTS"
+    items:
+      - "DIAMOND_SWORD:1"
+      - "COOKED_BEEF:16"
+      - "GOLDEN_APPLE:3"
+    effects:
+      SPEED:
+        duration: 300
+        amplifier: 1
+    heal: true
+
+  archer:
+    clear-inventory: true
+    armor:
+      helmet: "LEATHER_HELMET"
+      chestplate: "LEATHER_CHESTPLATE"
+      leggings: "LEATHER_LEGGINGS"
+      boots: "LEATHER_BOOTS"
+    items:
+      - "BOW:1"
+      - "ARROW:64"
+      - "STONE_SWORD:1"
