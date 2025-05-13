@@ -10,11 +10,17 @@
 [![Download on Modrinth](https://img.shields.io/modrinth/dt/eventtools?style=flat&logo=modrinth&label=Download%20on%20Modrinth&link=https%3A%2F%2Fmodrinth.com%2Fmod%2Fmusichud)](https://modrinth.com/plugin/eventtools)
 [![Download on GitHub](https://img.shields.io/github/downloads/mattwhyy/EventTools/total?style=flat&logo=github&label=Download%20on%20GitHub)](https://github.com/mattwhyy/EventTools/releases)
 
-**EventTools** is the **perfect solution** for anything **event** related. Whether its a simple **100 Players Event** or even a **Minigame Event**, this plugin has got you covered!
+**EventTools** is the **perfect solution** for anything **event** related. Whether its a simple **100 Players Event**, a **Minigame Event** or even a **Competetive Event**, this plugin has got you covered!
 
+The plugin features **player elimination, reviving, voting systems, timed effects, custom kits, chat controls, and fireworks celebrations.** With commands like **/startevent, /eliminate, /revive, /numberguess**, and **PlaceholderAPI support**, it's perfect for tournaments, PvP games, or minigames.
+## Commands
+The **full list of commands** is available [here](https://github.com/mattwhyy/EventTools/wiki/Commands).
+## Placeholders
+The **full list of placeholders** is available [here](https://github.com/mattwhyy/EventTools/wiki/Placeholders).
 ## Configuration
-You can customize event messages in **config.yml:**
 ```
+settings:
+  elimination-gamemode: SURVIVAL  # Can be SPECTATOR, ADVENTURE, or SURVIVAL
 messages:
   event-start-title: "§6Event started!"
   event-start-subtitle: "§eGood luck!"
@@ -22,9 +28,36 @@ messages:
   event-end-title: "§aEvent ended!"
   event-end-subtitle: "§7Thanks for playing!"
   event-ended: "&a&lEVENT ENDED!"
+kits:
+  starter:
+    clear-inventory: true
+    armor:
+      helmet: "DIAMOND_HELMET"
+      chestplate: "DIAMOND_CHESTPLATE"
+      leggings: "DIAMOND_LEGGINGS"
+      boots: "DIAMOND_BOOTS"
+    items:
+      - "DIAMOND_SWORD:1"
+      - "COOKED_BEEF:16"
+      - "GOLDEN_APPLE:3"
+    effects:
+      SPEED:
+        duration: 300
+        amplifier: 1
+    heal: true
+
+  archer:
+    clear-inventory: true
+    armor:
+      helmet: "LEATHER_HELMET"
+      chestplate: "LEATHER_CHESTPLATE"
+      leggings: "LEATHER_LEGGINGS"
+      boots: "LEATHER_BOOTS"
+    items:
+      - "BOW:1"
+      - "ARROW:64"
+      - "STONE_SWORD:1"
 ```
-## Commands
-The **full list of commands** is available [here](https://github.com/mattwhyy/EventTools/wiki/Commands).
 
 ## Setup
 Put the ```jar``` file into your server's **plugin folder**.
