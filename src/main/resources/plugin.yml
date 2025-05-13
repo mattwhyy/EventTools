@@ -25,6 +25,14 @@ commands:
     description: Stop the event
     usage: /stopevent
 
+  zone:
+    description: Create a zone
+    usage: /bring <player|all|alive|eliminated>
+
+  team:
+    description: Create teams
+    usage: /bring <player|all|alive|eliminated>
+
   # Player Management
   bring:
     description: Teleport players to your location

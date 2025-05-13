@@ -1,5 +1,11 @@
 package net.mattwhyy.eventTools;
 
+import net.mattwhyy.eventTools.teams.Team;
+import net.mattwhyy.eventTools.teams.TeamManager;
+import net.mattwhyy.eventTools.zones.EventZone;
+import net.mattwhyy.eventTools.zones.Shape;
+import net.mattwhyy.eventTools.zones.ZoneManager;
+import net.mattwhyy.eventTools.zones.ZoneType;
 import org.bukkit.*;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -36,8 +42,10 @@ public final class EventTools extends JavaPlugin implements Listener {
     final Map<UUID, Boolean> votes = new ConcurrentHashMap<>();
 
     volatile String eventTitle = "Event";
+    private ZoneManager zoneManager;
+    private TeamManager teamManager;
     private Location spawnLocation;
-    volatile boolean eventActive = false;
+    public volatile boolean eventActive = false;
     private volatile boolean chatMuted = false;
     private volatile boolean numberGuessActive = false;
     private volatile int targetNumber;
@@ -57,6 +65,10 @@ public final class EventTools extends JavaPlugin implements Listener {
         getLogger().info("EventTools has been enabled!");
         registerCommands();
         getServer().getPluginManager().registerEvents(this, this);
+        this.zoneManager = new ZoneManager(this);
+        this.teamManager = new TeamManager(this);
+        this.zoneManager.startParticleRenderer();
+        this.teamManager.startValidationTask();
         if (Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI")) {
             this.expansion = new EventToolsExpansion(this);
             this.expansion.register();
@@ -68,7 +80,7 @@ public final class EventTools extends JavaPlugin implements Listener {
                 "eliminate", "revive", "seteventspawn", "startevent", "stopevent",
                 "bring", "heal", "list", "mutechat", "clearchat", "freeze",
                 "timedeffect", "invsee", "changegamemode", "kit", "startvote", "endvote", "countdown", "numberguess",
-                "giveitem", "clearinventory"
+                "giveitem", "clearinventory", "zone", "team"
         ).forEach(cmd -> getCommand(cmd).setExecutor(this));
     }
 
@@ -77,6 +89,9 @@ public final class EventTools extends JavaPlugin implements Listener {
         cleanupTasks();
         if (this.expansion != null) {
             this.expansion.unregister();
+        }
+        if (zoneManager != null) {
+            zoneManager.shutdown();
         }
         getLogger().info("EventTools has been disabled!");
     }
@@ -118,6 +133,8 @@ public final class EventTools extends JavaPlugin implements Listener {
                 case "numberguess": return handleNumberGuess(sender, args);
                 case "mutechat": return handleMuteChat(sender);
                 case "clearchat": return handleClearChat(sender);
+                case "zone": return handleZoneCommand(sender, args);
+                case "team": return handleTeamCommand(sender, args);
                 default: return false;
             }
         } catch (Exception e) {
@@ -144,11 +161,28 @@ public final class EventTools extends JavaPlugin implements Listener {
             return true;
         }
 
-        int eligiblePlayers = getEligiblePlayerCount(sender);
-        if (eligiblePlayers < 4) {
-            sendMessage(sender, "&cYou need at least 4 players to start!");
-            return true;
+        if (teamManager.hasActiveTeams()) {
+            List<Team> activeTeams = teamManager.getActiveTeams();
+
+            if (activeTeams.size() < 2) {
+                sendMessage(sender, "&cYou need at least 2 teams to start a team event!");
+                return true;
+            }
+
+            if (activeTeams.stream().anyMatch(team -> team.size() < 1)) {
+                sendMessage(sender, "&cAll teams must have at least 1 player!");
+                return true;
+            }
         }
+
+        eliminatedPlayers.clear();
+        eliminationOrder.clear();
+        eventStartTime = System.currentTimeMillis();
+
+        eventActive = true;
+        chatMuted = false;
+        numberGuessActive = false;
+        votes.clear();
 
         if (args.length > 0) {
             eventTitle = String.join(" ", args);
@@ -156,9 +190,14 @@ public final class EventTools extends JavaPlugin implements Listener {
             eventTitle = "Event";
         }
 
-        resetEvent();
-        eventActive = true;
-        eventStartTime = System.currentTimeMillis();
+        if (teamManager.hasActiveTeams()) {
+            teamManager.preserveTeamsOnStart();
+            broadcastMessage("&6&lTEAM EVENT STARTED! &e" +
+                    teamManager.getActiveTeams().size() + " teams competing!");
+        } else {
+            broadcastMessage("&6&lEVENT STARTED! &eFree-for-all mode!");
+        }
+
         Bukkit.getOnlinePlayers().forEach(player -> {
             player.playSound(
                     player.getLocation(),
@@ -167,11 +206,12 @@ public final class EventTools extends JavaPlugin implements Listener {
                     0.5f
             );
         });
+
         broadcastTitle(
                 config.getString("messages.event-start-title", "§6Event started!"),
                 config.getString("messages.event-start-subtitle", "§eGood luck!")
         );
-        broadcastMessage(config.getString("messages.event-started", "&6&l" + eventTitle + " STARTED! &eEliminations are now active."));
+
         return true;
     }
 
@@ -187,7 +227,7 @@ public final class EventTools extends JavaPlugin implements Listener {
         );
         resetEvent();
         eventStartTime = 0;
-        broadcastMessage(config.getString("messages.event-ended", "&a&lEVENT ENDED!"));
+        broadcastMessage("&a&lEVENT ENDED!");
         return true;
     }
 
@@ -380,10 +420,9 @@ public final class EventTools extends JavaPlugin implements Listener {
                     .collect(Collectors.toList());
 
             for (Player player : toEliminate) {
-                if (eliminatePlayer(player)) {
-                    count++;
-                    broadcastMessage("&c" + player.getName() + " has been eliminated!");
-                }
+                handleElimination(player);
+
+                count++;
             }
 
             sendMessage(sender, "&aEliminated " + count + " players!");
@@ -400,12 +439,8 @@ public final class EventTools extends JavaPlugin implements Listener {
             sendMessage(sender, "&cYou can't eliminate this player!");
             return true;
         }
-        if (eliminatePlayer(target)) {
-            broadcastMessage("&c" + target.getName() + " has been eliminated!");
-            checkForEventEnd();
-        } else {
-            sendMessage(sender, "&c" + target.getName() + " is already eliminated!");
-        }
+
+        handleElimination(target);
         return true;
     }
 
@@ -755,6 +790,144 @@ public final class EventTools extends JavaPlugin implements Listener {
         return true;
     }
 
+    private boolean handleZoneCommand(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player)) {
+            sendMessage(sender, "&cOnly players can use zone commands!");
+            return true;
+        }
+        Player player = (Player) sender;
+
+        if (args.length < 1) {
+            sendZoneHelp(sender);
+            return true;
+        }
+
+        switch (args[0].toLowerCase()) {
+            case "create":
+                return handleZoneCreate(player, args);
+            case "delete":
+                return handleZoneDelete(player, args);
+            case "list":
+                return handleZoneList(player);
+            case "toggle":
+                return handleZoneToggle(player, args);
+            default:
+                sendZoneHelp(sender);
+                return true;
+        }
+    }
+
+    private boolean handleZoneCreate(Player sender, String[] args) {
+        if (args.length < 5) {
+            sendMessage(sender, "&cUsage: /zone create <name> <circle|square> <radius> <effect|must_stay|safe> [effect:amplifier]");
+            return true;
+        }
+
+        try {
+            String name = args[1];
+            Shape shape = Shape.valueOf(args[2].toUpperCase());
+            int radius = Math.min(Integer.parseInt(args[3]), 50);
+            ZoneType type = ZoneType.valueOf(args[4].toUpperCase());
+
+            PotionEffect effect = null;
+            if (type == ZoneType.EFFECT) {
+                if (args.length < 6) {
+                    sendMessage(sender, "&cEffect zones require an effect! Example: /zone create speedzone circle 10 effect speed:1");
+                    return true;
+                }
+                String[] effectParts = args[5].split(":");
+                PotionEffectType effectType = PotionEffectType.getByName(effectParts[0].toUpperCase());
+                if (effectType == null) throw new IllegalArgumentException();
+                int amplifier = effectParts.length > 1 ? Integer.parseInt(effectParts[1]) : 0;
+                effect = new PotionEffect(effectType, Integer.MAX_VALUE, amplifier);
+            } else if (args.length > 5) {
+                sendMessage(sender, "&cOnly effect zones need additional arguments!");
+                return true;
+            }
+
+            EventZone zone = new EventZone(name, sender.getLocation(), shape, radius, type, effect);
+            zoneManager.addZone(zone);
+
+            sendMessage(sender, String.format(
+                    "&aCreated %s zone '%s' (Radius: %d) at your location!",
+                    type.name().toLowerCase(), name, radius
+            ));
+            return true;
+        } catch (IllegalArgumentException e) {
+            sendMessage(sender, "&cInvalid arguments! Valid zone types: effect, must_stay, safe");
+            return true;
+        }
+    }
+
+    private boolean handleZoneDelete(Player sender, String[] args) {
+        if (args.length < 2) {
+            sendMessage(sender, "&cUsage: /zone delete <name>");
+            return true;
+        }
+
+        if (zoneManager.removeZone(args[1])) {
+            sendMessage(sender, "&aDeleted zone '" + args[1] + "'");
+        } else {
+            sendMessage(sender, "&cZone not found!");
+        }
+        return true;
+    }
+
+    private boolean handleZoneList(Player sender) {
+        List<String> zones = zoneManager.getZoneNames();
+        if (zones.isEmpty()) {
+            sendMessage(sender, "&7No active zones");
+            return true;
+        }
+
+        StringBuilder message = new StringBuilder("&6Active Zones:\n");
+        for (String zoneName : zones) {
+            EventZone zone = zoneManager.getZone(zoneName);
+            message.append(String.format(
+                    "&7- &e%s &7(Type: %s, Radius: %d, Location: %d,%d,%d)\n",
+                    zoneName,
+                    zone.getType(),
+                    zone.getRadius(),
+                    zone.getCenter().getBlockX(),
+                    zone.getCenter().getBlockY(),
+                    zone.getCenter().getBlockZ()
+            ));
+        }
+        sendMessage(sender, message.toString());
+        return true;
+    }
+
+    private void sendZoneHelp(CommandSender sender) {
+        sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
+                "&6Zone Commands:\n" +
+                        "&e/zone create <name> <circle|square> <radius> <effect|must_stay|safe> [effect:amplifier]\n" +
+                        "&e/zone delete <name>\n" +
+                        "&e/zone list\n" +
+                        "&e/zone toggle <name>\n" +
+                        "&7Example: /zone create speed_zone circle 15 effect speed:1"
+        ));
+    }
+
+    private boolean handleZoneToggle(Player player, String[] args) {
+        if (args.length < 2) {
+            sendMessage(player, "&cUsage: /zone toggle <name>");
+            return true;
+        }
+
+        EventZone zone = zoneManager.getZone(args[1]);
+        if (zone == null) {
+            sendMessage(player, "&cZone not found!");
+            return true;
+        }
+
+        zone.setActive(!zone.isActive());
+        sendMessage(player, String.format("&aZone '%s' is now %s",
+                zone.getName(),
+                zone.isActive() ? "&aACTIVE" : "&cINACTIVE"
+        ));
+        return true;
+    }
+
     private int getEligiblePlayerCount(CommandSender sender) {
         return (int) Bukkit.getOnlinePlayers().stream()
                 .filter(p -> !p.equals(sender))
@@ -770,7 +943,7 @@ public final class EventTools extends JavaPlugin implements Listener {
         }
     }
 
-    boolean isEliminated(Player player) {
+    public boolean isEliminated(Player player) {
         return eliminatedPlayers.contains(player.getUniqueId());
     }
 
@@ -809,7 +982,7 @@ public final class EventTools extends JavaPlugin implements Listener {
                 player.removePotionEffect(effect.getType()));
     }
 
-    private void resetEvent() {
+    public void resetEvent() {
         eliminatedPlayers.clear();
         disconnectedPlayers.clear();
         eliminationOrder.clear();
@@ -821,6 +994,21 @@ public final class EventTools extends JavaPlugin implements Listener {
         numberGuessWinner = null;
         voteInProgress = false;
         currentVoteQuestion = null;
+
+        if (!teamManager.getTeamNames().isEmpty()) {
+            teamManager.getAllTeams().forEach(team -> {
+                team.getMembers().stream()
+                        .map(Bukkit::getPlayer)
+                        .filter(Objects::nonNull)
+                        .forEach(player -> {
+                            player.setDisplayName(null);
+                            player.setPlayerListName(null);
+                            player.setCustomName(null);
+                        });
+            });
+
+            new ArrayList<>(teamManager.getTeamNames()).forEach(teamManager::deleteTeam);
+        }
 
         if (voteTask != null) {
             voteTask.cancel();
@@ -990,7 +1178,157 @@ public final class EventTools extends JavaPlugin implements Listener {
         }
     }
 
-    private boolean eliminatePlayer(Player player) {
+    private boolean handleTeamCommand(CommandSender sender, String[] args) {
+        if (args.length == 0) {
+            sendTeamHelp(sender);
+            return true;
+        }
+
+        switch (args[0].toLowerCase()) {
+            case "create":
+                return handleTeamCreate(sender, args);
+            case "delete":
+                return handleTeamDelete(sender, args);
+            case "assign":
+                return handleTeamAssign(sender, args);
+            case "balance":
+                return handleTeamBalance(sender);
+            case "color":
+                return handleTeamColor(sender, args);
+            case "info":
+                return handleTeamInfo(sender);
+            default:
+                sendTeamHelp(sender);
+                return true;
+        }
+    }
+
+    private boolean handleTeamCreate(CommandSender sender, String[] args) {
+        if (args.length < 3) {
+            sendMessage(sender, "&cUsage: /team create <name> <color>");
+            sendMessage(sender, "&7Available colors: " + Arrays.toString(ChatColor.values()));
+            return true;
+        }
+
+        try {
+            ChatColor color = ChatColor.valueOf(args[2].toUpperCase());
+            if (teamManager.createTeam(args[1], color)) {
+                sendMessage(sender, "&aCreated team " + color + args[1]);
+            } else {
+                sendMessage(sender, "&cMax teams reached (4) or team already exists");
+            }
+        } catch (IllegalArgumentException e) {
+            sendMessage(sender, "&cInvalid color! Use: " + Arrays.toString(ChatColor.values()));
+        }
+        return true;
+    }
+
+    private boolean handleTeamDelete(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sendMessage(sender, "&cUsage: /team delete <name>");
+            return true;
+        }
+
+        if (teamManager.deleteTeam(args[1])) {
+            sendMessage(sender, "&aDeleted team " + args[1]);
+        } else {
+            sendMessage(sender, "&cTeam not found!");
+        }
+        return true;
+    }
+
+    private boolean handleTeamAssign(CommandSender sender, String[] args) {
+        if (args.length < 3) {
+            sendMessage(sender, "&cUsage: /team assign <player> <team>");
+            return true;
+        }
+
+        Player target = Bukkit.getPlayer(args[1]);
+        if (target == null) {
+            sendMessage(sender, "&cPlayer not found!");
+            return true;
+        }
+
+        if (teamManager.addToTeam(target, args[2])) {
+            sendMessage(sender, "&aAssigned " + target.getName() + " to " + args[2]);
+            sendMessage(target, "&aYou've been assigned to team " + args[2]);
+        } else {
+            sendMessage(sender, "&cTeam not found!");
+        }
+        return true;
+    }
+
+    private boolean handleTeamBalance(CommandSender sender) {
+        teamManager.balanceTeams();
+        broadcastMessage("&aTeams have been balanced!");
+        return true;
+    }
+
+    private boolean handleTeamColor(CommandSender sender, String[] args) {
+        if (args.length < 3) {
+            sendMessage(sender, "&cUsage: /team color <team> <newColor>");
+            return true;
+        }
+
+        Team team = teamManager.getTeam(args[1]);
+        if (team == null) {
+            sendMessage(sender, "&cTeam not found!");
+            return true;
+        }
+
+        try {
+            ChatColor color = ChatColor.valueOf(args[2].toUpperCase());
+            team.setColor(color);
+            sendMessage(sender, "&aTeam color updated!");
+        } catch (IllegalArgumentException e) {
+            sendMessage(sender, "&cInvalid color! Use: " + Arrays.toString(ChatColor.values()));
+        }
+        return true;
+    }
+
+    private boolean handleTeamInfo(CommandSender sender) {
+        if (!teamManager.hasActiveTeams()) {
+            sendMessage(sender, "&7No active teams. Use /team create");
+            return true;
+        }
+
+        StringBuilder message = new StringBuilder("&6Active Teams:\n");
+        teamManager.getActiveTeams().forEach(team -> {
+            message.append(team.getColor())
+                    .append(team.getName())
+                    .append(" &7(")
+                    .append(team.size())
+                    .append(" players): ");
+
+            message.append(team.getMembers().stream()
+                    .map(uuid -> {
+                        Player p = Bukkit.getPlayer(uuid);
+                        String status = (p != null && isEliminated(p)) ? "&m" : "";
+                        return status + (p != null ? p.getName() : "?");
+                    })
+                    .collect(Collectors.joining("&7, ")));
+
+            message.append("\n");
+        });
+
+        sendMessage(sender, message.toString());
+        return true;
+    }
+
+    private void sendTeamHelp(CommandSender sender) {
+        sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
+                "&6Team Commands:\n" +
+                        "&e/team create <name> <color> &7- Create new team\n" +
+                        "&e/team delete <name> &7- Remove a team\n" +
+                        "&e/team assign <player> <team> &7- Assign a player to a team\n" +
+                        "&e/team balance &7- Randomly distribute players\n" +
+                        "&e/team color <name> <color> &7- Change team color\n" +
+                        "&e/team info &7- Show detailed team info\n" +
+                        "&7Available colors: &f" + Arrays.toString(ChatColor.values())
+        ));
+    }
+
+    public boolean eliminatePlayer(Player player) {
         if (player.hasPermission("eventtools.bypass") || isEliminated(player)) {
             return false;
         }
@@ -1012,94 +1350,105 @@ public final class EventTools extends JavaPlugin implements Listener {
         return true;
     }
 
-    private void handleElimination(Player player) {
+    public void handleElimination(Player player) {
         if (!eliminatePlayer(player)) return;
 
-        broadcastMessage("&c" + player.getName() + " has been eliminated!");
+        Optional<Team> team = teamManager.getPlayerTeam(player);
+
+        if (team.isPresent()) {
+            broadcastMessage(team.get().getColor() + team.get().getName() +
+                    " &7> &c" + player.getName() + " has been eliminated!");
+        } else {
+            broadcastMessage("&c" + player.getName() + " has been eliminated!");
+        }
 
         checkForEventEnd();
     }
 
     private void checkForEventEnd() {
-        List<Player> remainingPlayers = Bukkit.getOnlinePlayers().stream()
-                .filter(p -> !p.hasPermission("eventtools.bypass"))
-                .filter(p -> !isEliminated(p))
-                .collect(Collectors.toList());
+        if (teamManager.getTeamNames().isEmpty()) {
+            List<Player> remainingPlayers = Bukkit.getOnlinePlayers().stream()
+                    .filter(p -> !p.hasPermission("eventtools.bypass"))
+                    .filter(p -> !isEliminated(p))
+                    .collect(Collectors.toList());
 
-        if (remainingPlayers.size() <= 1) {
-            new BukkitRunnable() {
-                @Override
-                public void run() {
-                    List<Player> finalPlayers = Bukkit.getOnlinePlayers().stream()
-                            .filter(p -> !p.hasPermission("eventtools.bypass"))
-                            .filter(p -> !isEliminated(p))
-                            .collect(Collectors.toList());
+            if (remainingPlayers.size() <= 1) {
+                new BukkitRunnable() {
+                    @Override
+                    public void run() {
+                        List<Player> finalPlayers = Bukkit.getOnlinePlayers().stream()
+                                .filter(p -> !p.hasPermission("eventtools.bypass"))
+                                .filter(p -> !isEliminated(p))
+                                .collect(Collectors.toList());
 
-                    if (finalPlayers.size() == 1) {
-                        Player winner = finalPlayers.get(0);
-                        broadcastTitle("&6&lWINNER", "&7"+ winner.getName());
-                        EventTools plugin = (EventTools) Bukkit.getPluginManager().getPlugin("EventTools");
+                        if (finalPlayers.size() == 1) {
+                            Player winner = finalPlayers.get(0);
+                            broadcastTitle("&6&lWINNER", "&7"+ winner.getName());
+                            EventTools plugin = (EventTools) Bukkit.getPluginManager().getPlugin("EventTools");
 
-                        Bukkit.getOnlinePlayers().forEach(player -> {
-                            player.playSound(
-                                    winner.getLocation(),
-                                    Sound.ENTITY_EXPERIENCE_ORB_PICKUP,
-                                    1.0f,
-                                    0.5f
-                            );
-                        });
+                            Bukkit.getOnlinePlayers().forEach(player -> {
+                                player.playSound(
+                                        winner.getLocation(),
+                                        Sound.ENTITY_EXPERIENCE_ORB_PICKUP,
+                                        1.0f,
+                                        0.5f
+                                );
+                            });
 
-                        new BukkitRunnable() {
-                            int fireworksLeft = 15;
-                            Random random = new Random();
+                            new BukkitRunnable() {
+                                int fireworksLeft = 15;
+                                Random random = new Random();
 
-                            @Override
-                            public void run() {
-                                if (fireworksLeft <= 0) {
-                                    cancel();
-                                    return;
+                                @Override
+                                public void run() {
+                                    if (fireworksLeft <= 0) {
+                                        cancel();
+                                        return;
+                                    }
+
+                                    Location loc = winner.getLocation();
+                                    Firework fw = (Firework) loc.getWorld().spawnEntity(loc, EntityType.FIREWORK);
+                                    FireworkMeta meta = fw.getFireworkMeta();
+
+                                    FireworkEffect.Type type = FireworkEffect.Type.values()[random.nextInt(FireworkEffect.Type.values().length)];
+                                    Color color = Color.fromRGB(random.nextInt(256), random.nextInt(256), random.nextInt(256));
+                                    Color fade = Color.fromRGB(random.nextInt(256), random.nextInt(256), random.nextInt(256));
+
+                                    Bukkit.getOnlinePlayers().forEach(player -> {
+                                        player.playSound(
+                                                winner.getLocation(),
+                                                Sound.ENTITY_FIREWORK_ROCKET_LAUNCH,
+                                                1.0f,
+                                                1.0f
+                                        );
+                                    });
+
+                                    meta.addEffect(FireworkEffect.builder()
+                                            .with(type)
+                                            .withColor(color)
+                                            .withFade(fade)
+                                            .trail(random.nextBoolean())
+                                            .flicker(random.nextBoolean())
+                                            .build());
+
+                                    meta.setPower(1 + random.nextInt(2));
+                                    fw.setFireworkMeta(meta);
+
+                                    fireworksLeft--;
                                 }
+                            }.runTaskTimer(plugin, 0L, 10L);
 
-                                Location loc = winner.getLocation();
-                                Firework fw = (Firework) loc.getWorld().spawnEntity(loc, EntityType.FIREWORK);
-                                FireworkMeta meta = fw.getFireworkMeta();
+                        } else if (finalPlayers.isEmpty()) {
+                            broadcastMessage("&cAll players were eliminated!");
+                        }
 
-                                FireworkEffect.Type type = FireworkEffect.Type.values()[random.nextInt(FireworkEffect.Type.values().length)];
-                                Color color = Color.fromRGB(random.nextInt(256), random.nextInt(256), random.nextInt(256));
-                                Color fade = Color.fromRGB(random.nextInt(256), random.nextInt(256), random.nextInt(256));
-
-                                Bukkit.getOnlinePlayers().forEach(player -> {
-                                    player.playSound(
-                                            winner.getLocation(),
-                                            Sound.ENTITY_FIREWORK_ROCKET_LAUNCH,
-                                            1.0f,
-                                            1.0f
-                                    );
-                                });
-
-                                meta.addEffect(FireworkEffect.builder()
-                                        .with(type)
-                                        .withColor(color)
-                                        .withFade(fade)
-                                        .trail(random.nextBoolean())
-                                        .flicker(random.nextBoolean())
-                                        .build());
-
-                                meta.setPower(1 + random.nextInt(2));
-                                fw.setFireworkMeta(meta);
-
-                                fireworksLeft--;
-                            }
-                        }.runTaskTimer(plugin, 0L, 10L);
-
-                    } else if (finalPlayers.isEmpty()) {
-                        broadcastMessage("&cAll players were eliminated!");
+                        announceFinalPlacements();
+                        resetEvent();
                     }
-
-                    announceFinalPlacements();
-                    resetEvent();
-                }
-            }.runTask(this);
+                }.runTask(this);
+            }
+        } else {
+            teamManager.checkForTeamVictory();
         }
     }
 
@@ -1110,6 +1459,8 @@ public final class EventTools extends JavaPlugin implements Listener {
         eliminatedPlayers.remove(player.getUniqueId());
         eliminationOrder.remove(player.getUniqueId());
         player.setGameMode(GameMode.SURVIVAL);
+
+        teamManager.handleRevival(player);
 
         if (sender instanceof Player senderPlayer) {
             safeTeleport(player, senderPlayer.getLocation());
@@ -1167,7 +1518,7 @@ public final class EventTools extends JavaPlugin implements Listener {
         }
     }
 
-    private void broadcastTitle(String title, String subtitle) {
+    public void broadcastTitle(String title, String subtitle) {
         Bukkit.getOnlinePlayers().forEach(p ->
                 p.sendTitle(
                         ChatColor.translateAlternateColorCodes('&', title),
@@ -1181,7 +1532,7 @@ public final class EventTools extends JavaPlugin implements Listener {
         sender.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
     }
 
-    private void broadcastMessage(String message) {
+    public void broadcastMessage(String message) {
         Bukkit.broadcastMessage(ChatColor.translateAlternateColorCodes('&', message));
     }
 
@@ -1360,6 +1711,66 @@ public final class EventTools extends JavaPlugin implements Listener {
                 break;
             case "list":
                 if (args.length == 1) completions.addAll(Arrays.asList("alive", "eliminated", "all"));
+                break;
+
+            case "zone":
+                if (args.length == 1) {
+                    return filterCompletions(Arrays.asList("create", "delete", "list", "toggle"), args[0]);
+                } else if (args.length == 2 && args[0].equalsIgnoreCase("create")) {
+                    return filterCompletions(Collections.singletonList("<name>"), args[1]);
+                } else if (args.length == 3 && args[0].equalsIgnoreCase("create")) {
+                    return filterCompletions(Arrays.asList("circle", "square"), args[2]);
+                } else if (args.length == 4 && args[0].equalsIgnoreCase("create")) {
+                    return filterCompletions(Collections.singletonList("<radius>"), args[3]);
+                } else if (args.length == 5 && args[0].equalsIgnoreCase("create")) {
+                    return filterCompletions(Arrays.asList("effect", "must_stay", "safe"), args[4]);
+                } else if (args.length == 6 && args[0].equalsIgnoreCase("create") && args[4].equalsIgnoreCase("effect")) {
+                    return filterCompletions(
+                            Arrays.stream(PotionEffectType.values())
+                                    .map(e -> e.getName().toLowerCase())
+                                    .collect(Collectors.toList()),
+                            args[5]
+                    );
+                } else if (args.length == 2 && (args[0].equalsIgnoreCase("delete") || args[0].equalsIgnoreCase("toggle"))) {
+                    return filterCompletions(zoneManager.getZoneNames(), args[1]);
+                }
+                break;
+
+            case "team":
+                if (args.length == 1) {
+                    return filterCompletions(Arrays.asList(
+                            "create", "delete", "assign",
+                            "balance", "color", "info"
+                    ), args[0]);
+                } else if (args.length == 2 && args[0].equalsIgnoreCase("create")) {
+                    return filterCompletions(Collections.singletonList("<name>"), args[1]);
+                } else if (args.length == 3 && args[0].equalsIgnoreCase("create")) {
+                    return filterCompletions(
+                            Arrays.stream(ChatColor.values())
+                                    .filter(c -> c != ChatColor.RESET)
+                                    .map(Enum::name)
+                                    .collect(Collectors.toList()),
+                            args[2]
+                    );
+                } else if (args.length == 2) {
+                    if (args[0].equalsIgnoreCase("assign")) {
+                        return filterCompletions(getOnlinePlayerNames(), args[1]);
+                    } else if (args[0].equalsIgnoreCase("delete") ||
+                            args[0].equalsIgnoreCase("color")) {
+                        return filterCompletions(teamManager.getTeamNames(), args[1]);
+                    }
+                } else if (args.length == 3) {
+                    if (args[0].equalsIgnoreCase("assign")) {
+                        return filterCompletions(teamManager.getTeamNames(), args[2]);
+                    } else if (args[0].equalsIgnoreCase("color")) {
+                        return filterCompletions(
+                                Arrays.stream(ChatColor.values())
+                                        .map(Enum::name)
+                                        .collect(Collectors.toList()),
+                                args[2]
+                        );
+                    }
+                }
                 break;
 
             case "seteventspawn":

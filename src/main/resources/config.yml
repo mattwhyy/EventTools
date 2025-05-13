@@ -3,10 +3,8 @@ settings:
 messages:
   event-start-title: "§6Event started!"
   event-start-subtitle: "§eGood luck!"
-  event-started: "&6&lEVENT STARTED! &eEliminations are now active."
   event-end-title: "§aEvent ended!"
   event-end-subtitle: "§7Thanks for playing!"
-  event-ended: "&a&lEVENT ENDED!"
 kits:
   starter:
     clear-inventory: true
