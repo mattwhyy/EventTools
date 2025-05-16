@@ -1,5 +1,5 @@
 name: EventTools
-version: '1.02'
+version: '1.03-BETA'
 main: net.mattwhyy.eventTools.EventTools
 api-version: '1.16'
 authors: [ mattwhyy ]
