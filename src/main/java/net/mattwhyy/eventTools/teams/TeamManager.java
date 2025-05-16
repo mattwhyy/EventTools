@@ -16,49 +16,10 @@ public class TeamManager {
     private final Map<String, Team> teams = new ConcurrentHashMap<>();
     private final Set<UUID> unassignedPlayers = ConcurrentHashMap.newKeySet();
     private final EventTools plugin;
-    private static final int MAX_TEAMS = 4;
+    private static final int MAX_TEAMS = 16;
 
     public TeamManager(EventTools plugin) {
         this.plugin = plugin;
-    }
-
-    public void validateTeams() {
-        teams.values().removeIf(Objects::isNull);
-
-        teams.forEach((name, team) -> {
-            team.getMembers().removeIf(uuid ->
-                    Bukkit.getPlayer(uuid) == null || plugin.isEliminated(Bukkit.getPlayer(uuid))
-            );
-        });
-
-        if (plugin.eventActive) {
-            Bukkit.getOnlinePlayers().stream()
-                    .filter(p -> !p.hasPermission("eventtools.bypass"))
-                    .filter(p -> !plugin.isEliminated(p))
-                    .filter(p -> getPlayerTeam(p).isEmpty())
-                    .forEach(this::autoAssignPlayer);
-        }
-    }
-
-    public void startValidationTask() {
-        new BukkitRunnable() {
-            @Override
-            public void run() {
-                validateTeams();
-            }
-        }.runTaskTimer(plugin, 1200L, 1200L);
-    }
-
-    public void preserveTeamsOnStart() {
-        getAllTeams().forEach(team -> {
-            team.getMembers().stream()
-                    .map(Bukkit::getPlayer)
-                    .filter(Objects::nonNull)
-                    .forEach(player -> {
-                        player.setDisplayName(team.getColor() + player.getName());
-                        player.setPlayerListName(team.getColor() + player.getName());
-                    });
-        });
     }
 
     public boolean createTeam(String name, ChatColor color) {
@@ -72,10 +33,21 @@ public class TeamManager {
     public boolean deleteTeam(String name) {
         Team removed = teams.remove(name.toLowerCase());
         if (removed != null) {
-            removed.getMembers().stream()
-                    .map(uuid -> Bukkit.getPlayer(uuid))
+            List<Player> playersToReassign = removed.getMembers().stream()
+                    .map(Bukkit::getPlayer)
                     .filter(Objects::nonNull)
-                    .forEach(removed::resetPlayerDisplay);
+                    .toList();
+
+            playersToReassign.forEach(removed::resetPlayerDisplay);
+
+            if (teams.size() == 1 && plugin.eventActive) {
+                Team lastTeam = teams.values().iterator().next();
+                deleteTeam(lastTeam.getName());
+            }
+            else if (plugin.eventActive) {
+                playersToReassign.forEach(p -> unassignedPlayers.add(p.getUniqueId()));
+                balanceTeams();
+            }
             return true;
         }
         return false;
@@ -113,7 +85,7 @@ public class TeamManager {
     }
 
     public void handleRevival(Player player) {
-        if (plugin.eventActive && teams.size() > 0) {
+        if (plugin.eventActive && !teams.isEmpty()) {
             autoAssignPlayer(player);
         }
     }
@@ -136,28 +108,24 @@ public class TeamManager {
     }
 
     public void balanceTeams() {
-        teams.values().forEach(team ->
-                new HashSet<>(team.getMembers()).forEach(uuid -> {
-                    Player p = Bukkit.getPlayer(uuid);
-                    if (p != null) team.removeMember(p);
-                })
-        );
-
-        List<Player> players = Bukkit.getOnlinePlayers().stream()
+        List<Player> unassignedPlayers = Bukkit.getOnlinePlayers().stream()
                 .filter(p -> !p.hasPermission("eventtools.bypass"))
+                .filter(p -> getPlayerTeam(p).isEmpty())
                 .collect(Collectors.toList());
 
-        Collections.shuffle(players);
+        List<Team> activeTeams = new ArrayList<>(teams.values());
+
+        if (activeTeams.isEmpty() || unassignedPlayers.isEmpty()) {
+            return;
+        }
+
+        Collections.shuffle(unassignedPlayers);
+        Collections.shuffle(activeTeams);
+
         int teamIndex = 0;
-        Team[] teamArray = teams.values().toArray(new Team[0]);
-
-        for (Player player : players) {
-            if (teamArray.length == 0) {
-                unassignedPlayers.add(player.getUniqueId());
-                continue;
-            }
-
-            teamArray[teamIndex % teamArray.length].addMember(player);
+        for (Player player : unassignedPlayers) {
+            Team team = activeTeams.get(teamIndex % activeTeams.size());
+            team.addMember(player);
             teamIndex++;
         }
     }
@@ -169,108 +137,94 @@ public class TeamManager {
     public void checkForTeamVictory() {
         if (!plugin.eventActive || teams.isEmpty()) return;
 
-        long activeTeams = teams.values().stream()
-                .filter(team -> team.getMembers().stream()
-                        .map(Bukkit::getPlayer)
-                        .filter(Objects::nonNull)
-                        .anyMatch(p -> !plugin.isEliminated(p)))
-                .count();
+        List<Team> activeTeams = teams.values().stream()
+                .filter(this::hasActiveMembers)
+                .toList();
 
-        if (activeTeams <= 1) {
-            Team winningTeam = teams.values().stream()
-                    .filter(team -> team.getMembers().stream()
-                            .map(Bukkit::getPlayer)
-                            .filter(Objects::nonNull)
-                            .anyMatch(p -> !plugin.isEliminated(p)))
-                    .findFirst()
-                    .orElse(null);
+        if (activeTeams.size() <= 1) {
+            Team winningTeam = activeTeams.isEmpty() ? null : activeTeams.get(0);
 
             if (winningTeam != null) {
-                plugin.broadcastTitle(
-                        "&6&lTEAM VICTORY",
-                        winningTeam.getColor() + winningTeam.getName() + " &awins!"
-                );
+                announceTeamVictory(winningTeam);
+                celebrateVictory(winningTeam);
+            } else {
+                plugin.broadcastMessage("&cAll teams were eliminated!");
+            }
 
-                List<Player> winners = winningTeam.getMembers().stream()
-                        .map(Bukkit::getPlayer)
-                        .filter(Objects::nonNull)
-                        .filter(player -> !plugin.isEliminated(player))
-                        .collect(Collectors.toList());
+            plugin.resetEvent();
+        }
+    }
 
-                if (winners.isEmpty()) {
-                    plugin.resetEvent();
+    private boolean hasActiveMembers(Team team) {
+        return team.getMembers().stream()
+                .map(Bukkit::getPlayer)
+                .filter(Objects::nonNull)
+                .anyMatch(p -> !plugin.isEliminated(p));
+    }
+
+    private void announceTeamVictory(Team team) {
+        plugin.broadcastTitle(
+                "&6&lTEAM VICTORY",
+                team.getColor() + team.getName() + " &awins!"
+        );
+        plugin.broadcastMessage(team.getColor() + team.getName() + " &ahas won the event!");
+    }
+
+    private void celebrateVictory(Team team) {
+        List<Player> winners = team.getMembers().stream()
+                .map(Bukkit::getPlayer)
+                .filter(Objects::nonNull)
+                .filter(p -> !plugin.isEliminated(p))
+                .collect(Collectors.toList());
+
+        if (winners.isEmpty()) return;
+
+        Player celebrationWinner = winners.get(new Random().nextInt(winners.size()));
+        Location center = celebrationWinner.getLocation();
+
+        Bukkit.getOnlinePlayers().forEach(p ->
+                p.playSound(p.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 0.5f)
+        );
+
+        new BukkitRunnable() {
+            int fireworksLeft = 15;
+            Random random = new Random();
+
+            @Override
+            public void run() {
+                if (fireworksLeft <= 0) {
+                    cancel();
                     return;
                 }
 
-                Player firstWinner = winners.get(0);
-                Bukkit.getOnlinePlayers().forEach(player -> {
-                    player.playSound(
-                            firstWinner.getLocation(),
-                            Sound.ENTITY_EXPERIENCE_ORB_PICKUP,
-                            1.0f,
-                            0.5f
-                    );
-                });
+                Location fireworkLoc = center.clone().add(
+                        random.nextDouble() * 10 - 5,
+                        0,
+                        random.nextDouble() * 10 - 5
+                );
 
-                int totalFireworks = Math.min(15, 3 + winners.size());
-                int fireworksPerPlayer = Math.max(1, totalFireworks / winners.size());
+                Firework fw = celebrationWinner.getWorld().spawn(celebrationWinner.getLocation(), Firework.class);
+                FireworkMeta meta = fw.getFireworkMeta();
 
-                Random random = new Random();
+                FireworkEffect.Type type = FireworkEffect.Type.values()[random.nextInt(FireworkEffect.Type.values().length)];
+                Color color = Color.fromRGB(random.nextInt(256), random.nextInt(256), random.nextInt(256));
+                Color fade = Color.fromRGB(random.nextInt(256), random.nextInt(256), random.nextInt(256));
 
-                for (Player winner : winners) {
-                    new BukkitRunnable() {
-                        int fireworksLeft = fireworksPerPlayer;
+                meta.addEffect(FireworkEffect.builder()
+                        .with(type)
+                        .withColor(color)
+                        .withFade(fade)
+                        .trail(random.nextBoolean())
+                        .flicker(random.nextBoolean())
+                        .build());
 
-                        @Override
-                        public void run() {
-                            if (fireworksLeft <= 0) {
-                                cancel();
-                                return;
-                            }
+                meta.setPower(1 + random.nextInt(2));
+                fw.setFireworkMeta(meta);
 
-                            Location loc = winner.getLocation().add(
-                                    random.nextDouble() * 6 - 3,
-                                    0,
-                                    random.nextDouble() * 6 - 3
-                            );
+                fireworkLoc.getWorld().playSound(fireworkLoc, Sound.ENTITY_FIREWORK_ROCKET_LAUNCH, 1.0f, 1.0f);
 
-                            Firework fw = (Firework) loc.getWorld().spawnEntity(loc, EntityType.FIREWORK);
-                            FireworkMeta meta = fw.getFireworkMeta();
-
-                            FireworkEffect.Type type = FireworkEffect.Type.values()[random.nextInt(FireworkEffect.Type.values().length)];
-                            Color color = Color.fromRGB(random.nextInt(256), random.nextInt(256), random.nextInt(256));
-                            Color fade = Color.fromRGB(random.nextInt(256), random.nextInt(256), random.nextInt(256));
-
-                            loc.getWorld().getNearbyEntities(loc, 20, 20, 20).forEach(entity -> {
-                                if (entity instanceof Player) {
-                                    ((Player) entity).playSound(
-                                            loc,
-                                            Sound.ENTITY_FIREWORK_ROCKET_LAUNCH,
-                                            0.7f,
-                                            1.0f
-                                    );
-                                }
-                            });
-
-                            meta.addEffect(FireworkEffect.builder()
-                                    .with(type)
-                                    .withColor(color)
-                                    .withFade(fade)
-                                    .trail(random.nextBoolean())
-                                    .flicker(random.nextBoolean())
-                                    .build());
-
-                            meta.setPower(1 + random.nextInt(2));
-                            fw.setFireworkMeta(meta);
-
-                            fireworksLeft--;
-                        }
-
-                    }.runTaskTimer(plugin, 0L, 5 + random.nextInt(10));
-                }
-
-                plugin.resetEvent();
+                fireworksLeft--;
             }
-        }
+        }.runTaskTimer(plugin, 0L, 10L);
     }
 }

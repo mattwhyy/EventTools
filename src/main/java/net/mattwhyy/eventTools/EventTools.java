@@ -43,7 +43,7 @@ public final class EventTools extends JavaPlugin implements Listener {
 
     volatile String eventTitle = "Event";
     private ZoneManager zoneManager;
-    private TeamManager teamManager;
+    TeamManager teamManager;
     private Location spawnLocation;
     public volatile boolean eventActive = false;
     private volatile boolean chatMuted = false;
@@ -68,7 +68,6 @@ public final class EventTools extends JavaPlugin implements Listener {
         this.zoneManager = new ZoneManager(this);
         this.teamManager = new TeamManager(this);
         this.zoneManager.startParticleRenderer();
-        this.teamManager.startValidationTask();
         if (Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI")) {
             this.expansion = new EventToolsExpansion(this);
             this.expansion.register();
@@ -161,39 +160,41 @@ public final class EventTools extends JavaPlugin implements Listener {
             return true;
         }
 
-        if (teamManager.hasActiveTeams()) {
-            List<Team> activeTeams = teamManager.getActiveTeams();
-
-            if (activeTeams.size() < 2) {
-                sendMessage(sender, "&cYou need at least 2 teams to start a team event!");
-                return true;
-            }
-
-            if (activeTeams.stream().anyMatch(team -> team.size() < 1)) {
-                sendMessage(sender, "&cAll teams must have at least 1 player!");
-                return true;
-            }
-        }
-
         eliminatedPlayers.clear();
         eliminationOrder.clear();
         eventStartTime = System.currentTimeMillis();
-
         eventActive = true;
         chatMuted = false;
         numberGuessActive = false;
         votes.clear();
 
-        if (args.length > 0) {
-            eventTitle = String.join(" ", args);
-        } else {
-            eventTitle = "Event";
-        }
+        eventTitle = args.length > 0 ? String.join(" ", args) : "Event";
 
-        if (teamManager.hasActiveTeams()) {
-            teamManager.preserveTeamsOnStart();
-            broadcastMessage("&6&lTEAM EVENT STARTED! &e" +
-                    teamManager.getActiveTeams().size() + " teams competing!");
+        if (!teamManager.getTeamNames().isEmpty()) {
+            List<Team> activeTeams = teamManager.getActiveTeams();
+
+            if (activeTeams.isEmpty()) {
+                new ArrayList<>(teamManager.getTeamNames()).forEach(teamManager::deleteTeam);
+                broadcastMessage("&6&lEVENT STARTED! &eFree-for-all mode (no players in teams)");
+            }
+            else if (activeTeams.size() < 2) {
+                sendMessage(sender, "&cYou need at least 2 teams with players to start a team event!");
+                eventActive = false;
+                return true;
+            }
+            else {
+                List<Player> unassignedPlayers = Bukkit.getOnlinePlayers().stream()
+                        .filter(p -> !p.hasPermission("eventtools.bypass"))
+                        .filter(p -> !teamManager.getPlayerTeam(p).isPresent())
+                        .collect(Collectors.toList());
+
+                if (!unassignedPlayers.isEmpty()) {
+                    teamManager.balanceTeams();
+                    broadcastMessage("&aBalanced " + unassignedPlayers.size() + " unassigned players across teams");
+                }
+
+                broadcastMessage("&6&lTEAM EVENT STARTED! &e" + activeTeams.size() + " teams competing!");
+            }
         } else {
             broadcastMessage("&6&lEVENT STARTED! &eFree-for-all mode!");
         }
@@ -1191,8 +1192,10 @@ public final class EventTools extends JavaPlugin implements Listener {
                 return handleTeamDelete(sender, args);
             case "assign":
                 return handleTeamAssign(sender, args);
-            case "balance":
-                return handleTeamBalance(sender);
+            case "join":
+                return handleTeamJoin(sender, args);
+            case "leave":
+                return handleTeamLeave(sender, args);
             case "color":
                 return handleTeamColor(sender, args);
             case "info":
@@ -1249,6 +1252,11 @@ public final class EventTools extends JavaPlugin implements Listener {
             return true;
         }
 
+        if (target.hasPermission("eventtools.bypass")) {
+            sendMessage(sender, "&cYou can't assign staff to teams!");
+            return true;
+        }
+
         if (teamManager.addToTeam(target, args[2])) {
             sendMessage(sender, "&aAssigned " + target.getName() + " to " + args[2]);
             sendMessage(target, "&aYou've been assigned to team " + args[2]);
@@ -1258,9 +1266,74 @@ public final class EventTools extends JavaPlugin implements Listener {
         return true;
     }
 
-    private boolean handleTeamBalance(CommandSender sender) {
-        teamManager.balanceTeams();
-        broadcastMessage("&aTeams have been balanced!");
+    private boolean handleTeamJoin(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player)) {
+            sendMessage(sender, "&cOnly players can use this command!");
+            return true;
+        }
+
+        if (eventActive) {
+            sendMessage(sender, "&cYou cannot join teams during an active event!");
+            return true;
+        }
+
+        if (args.length < 2) {
+            sendMessage(sender, "&cUsage: /team join <team>");
+            return true;
+        }
+
+        Player player = (Player) sender;
+        if (player.hasPermission("eventtools.bypass")) {
+            sendMessage(sender, "&cStaff cannot join teams!");
+            return true;
+        }
+
+        if (teamManager.getPlayerTeam(player).isPresent()) {
+            sendMessage(sender, "&cYou are already in a team! Leave it first with /team leave");
+            return true;
+        }
+
+        Team team = teamManager.getTeam(args[1]);
+        if (team == null) {
+            sendMessage(sender, "&cTeam not found!");
+            return true;
+        }
+
+        if (teamManager.addToTeam(player, args[1])) {
+            sendMessage(sender, "&aYou have joined team " + team.getColor() + team.getName());
+            return true;
+        }
+
+        sendMessage(sender, "&cCould not join team!");
+        return true;
+    }
+
+    private boolean handleTeamLeave(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player)) {
+            sendMessage(sender, "&cOnly players can use this command!");
+            return true;
+        }
+
+        if (eventActive) {
+            sendMessage(sender, "&cYou cannot leave teams during an active event!");
+            return true;
+        }
+
+        Player player = (Player) sender;
+        if (player.hasPermission("eventtools.bypass")) {
+            sendMessage(sender, "&cStaff cannot leave teams!");
+            return true;
+        }
+
+        Optional<Team> currentTeam = teamManager.getPlayerTeam(player);
+        if (!currentTeam.isPresent()) {
+            sendMessage(sender, "&cYou are not in any team!");
+            return true;
+        }
+
+        Team team = currentTeam.get();
+        team.removeMember(player);
+        sendMessage(sender, "&aYou have left team " + team.getColor() + team.getName());
         return true;
     }
 
@@ -1321,7 +1394,6 @@ public final class EventTools extends JavaPlugin implements Listener {
                         "&e/team create <name> <color> &7- Create new team\n" +
                         "&e/team delete <name> &7- Remove a team\n" +
                         "&e/team assign <player> <team> &7- Assign a player to a team\n" +
-                        "&e/team balance &7- Randomly distribute players\n" +
                         "&e/team color <name> <color> &7- Change team color\n" +
                         "&e/team info &7- Show detailed team info\n" +
                         "&7Available colors: &f" + Arrays.toString(ChatColor.values())
@@ -1383,61 +1455,7 @@ public final class EventTools extends JavaPlugin implements Listener {
 
                         if (finalPlayers.size() == 1) {
                             Player winner = finalPlayers.get(0);
-                            broadcastTitle("&6&lWINNER", "&7"+ winner.getName());
-                            EventTools plugin = (EventTools) Bukkit.getPluginManager().getPlugin("EventTools");
-
-                            Bukkit.getOnlinePlayers().forEach(player -> {
-                                player.playSound(
-                                        winner.getLocation(),
-                                        Sound.ENTITY_EXPERIENCE_ORB_PICKUP,
-                                        1.0f,
-                                        0.5f
-                                );
-                            });
-
-                            new BukkitRunnable() {
-                                int fireworksLeft = 15;
-                                Random random = new Random();
-
-                                @Override
-                                public void run() {
-                                    if (fireworksLeft <= 0) {
-                                        cancel();
-                                        return;
-                                    }
-
-                                    Location loc = winner.getLocation();
-                                    Firework fw = (Firework) loc.getWorld().spawnEntity(loc, EntityType.FIREWORK);
-                                    FireworkMeta meta = fw.getFireworkMeta();
-
-                                    FireworkEffect.Type type = FireworkEffect.Type.values()[random.nextInt(FireworkEffect.Type.values().length)];
-                                    Color color = Color.fromRGB(random.nextInt(256), random.nextInt(256), random.nextInt(256));
-                                    Color fade = Color.fromRGB(random.nextInt(256), random.nextInt(256), random.nextInt(256));
-
-                                    Bukkit.getOnlinePlayers().forEach(player -> {
-                                        player.playSound(
-                                                winner.getLocation(),
-                                                Sound.ENTITY_FIREWORK_ROCKET_LAUNCH,
-                                                1.0f,
-                                                1.0f
-                                        );
-                                    });
-
-                                    meta.addEffect(FireworkEffect.builder()
-                                            .with(type)
-                                            .withColor(color)
-                                            .withFade(fade)
-                                            .trail(random.nextBoolean())
-                                            .flicker(random.nextBoolean())
-                                            .build());
-
-                                    meta.setPower(1 + random.nextInt(2));
-                                    fw.setFireworkMeta(meta);
-
-                                    fireworksLeft--;
-                                }
-                            }.runTaskTimer(plugin, 0L, 10L);
-
+                            broadcastWinnerEffects(winner);
                         } else if (finalPlayers.isEmpty()) {
                             broadcastMessage("&cAll players were eliminated!");
                         }
@@ -1450,6 +1468,50 @@ public final class EventTools extends JavaPlugin implements Listener {
         } else {
             teamManager.checkForTeamVictory();
         }
+    }
+
+    private void broadcastWinnerEffects(Player winner) {
+        broadcastTitle("&6&lWINNER", "&7" + winner.getName());
+        Bukkit.getOnlinePlayers().forEach(p ->
+                p.playSound(winner.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 0.5f)
+        );
+
+        new BukkitRunnable() {
+            int fireworksLeft = 15;
+            Random random = new Random();
+
+            @Override
+            public void run() {
+                if (fireworksLeft <= 0) {
+                    cancel();
+                    return;
+                }
+
+                Firework fw = winner.getWorld().spawn(winner.getLocation(), Firework.class);
+                FireworkMeta meta = fw.getFireworkMeta();
+
+                FireworkEffect.Type type = FireworkEffect.Type.values()[random.nextInt(FireworkEffect.Type.values().length)];
+                Color color = Color.fromRGB(random.nextInt(256), random.nextInt(256), random.nextInt(256));
+                Color fade = Color.fromRGB(random.nextInt(256), random.nextInt(256), random.nextInt(256));
+
+                meta.addEffect(FireworkEffect.builder()
+                        .with(type)
+                        .withColor(color)
+                        .withFade(fade)
+                        .trail(random.nextBoolean())
+                        .flicker(random.nextBoolean())
+                        .build());
+
+                meta.setPower(1 + random.nextInt(2));
+                fw.setFireworkMeta(meta);
+
+                Bukkit.getOnlinePlayers().forEach(p ->
+                        p.playSound(winner.getLocation(), Sound.ENTITY_FIREWORK_ROCKET_LAUNCH, 1.0f, 1.0f)
+                );
+
+                fireworksLeft--;
+            }
+        }.runTaskTimer(this, 0L, 10L);
     }
 
     private boolean revivePlayer(CommandSender sender, Player player) {
@@ -1739,36 +1801,35 @@ public final class EventTools extends JavaPlugin implements Listener {
             case "team":
                 if (args.length == 1) {
                     return filterCompletions(Arrays.asList(
-                            "create", "delete", "assign",
-                            "balance", "color", "info"
+                            "create", "delete", "join", "leave", "assign", "color", "info"
                     ), args[0]);
-                } else if (args.length == 2 && args[0].equalsIgnoreCase("create")) {
-                    return filterCompletions(Collections.singletonList("<name>"), args[1]);
-                } else if (args.length == 3 && args[0].equalsIgnoreCase("create")) {
-                    return filterCompletions(
-                            Arrays.stream(ChatColor.values())
-                                    .filter(c -> c != ChatColor.RESET)
-                                    .map(Enum::name)
-                                    .collect(Collectors.toList()),
-                            args[2]
-                    );
                 } else if (args.length == 2) {
-                    if (args[0].equalsIgnoreCase("assign")) {
-                        return filterCompletions(getOnlinePlayerNames(), args[1]);
-                    } else if (args[0].equalsIgnoreCase("delete") ||
-                            args[0].equalsIgnoreCase("color")) {
-                        return filterCompletions(teamManager.getTeamNames(), args[1]);
+                    switch (args[0].toLowerCase()) {
+                        case "create":
+                            return filterCompletions(Collections.singletonList("<name>"), args[1]);
+                        case "delete":
+                        case "color", "join":
+                            return filterCompletions(teamManager.getTeamNames(), args[1]);
+                        case "assign":
+                            return filterCompletions(getOnlinePlayerNames(), args[1]);
                     }
                 } else if (args.length == 3) {
-                    if (args[0].equalsIgnoreCase("assign")) {
-                        return filterCompletions(teamManager.getTeamNames(), args[2]);
-                    } else if (args[0].equalsIgnoreCase("color")) {
-                        return filterCompletions(
-                                Arrays.stream(ChatColor.values())
-                                        .map(Enum::name)
-                                        .collect(Collectors.toList()),
-                                args[2]
-                        );
+                    switch (args[0].toLowerCase()) {
+                        case "create":
+                            return filterCompletions(
+                                    Arrays.stream(ChatColor.values())
+                                            .filter(c -> c != ChatColor.RESET)
+                                            .map(Enum::name)
+                                            .collect(Collectors.toList()),
+                                    args[2]);
+                        case "assign":
+                            return filterCompletions(teamManager.getTeamNames(), args[2]);
+                        case "color":
+                            return filterCompletions(
+                                    Arrays.stream(ChatColor.values())
+                                            .map(Enum::name)
+                                            .collect(Collectors.toList()),
+                                    args[2]);
                     }
                 }
                 break;

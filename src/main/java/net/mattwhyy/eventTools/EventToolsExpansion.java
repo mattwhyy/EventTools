@@ -1,10 +1,13 @@
 package net.mattwhyy.eventTools;
 
 import me.clip.placeholderapi.expansion.PlaceholderExpansion;
+import net.mattwhyy.eventTools.teams.Team;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+
+import java.util.Objects;
 
 public class EventToolsExpansion extends PlaceholderExpansion {
     private final EventTools plugin;
@@ -93,6 +96,44 @@ public class EventToolsExpansion extends PlaceholderExpansion {
             case "event_title":
                 return !plugin.eventActive ? "None" :
                         (plugin.eventTitle != null ? plugin.eventTitle : "Event");
+
+            case "team_name":
+                return plugin.teamManager.getPlayerTeam(player)
+                        .map(Team::getName)
+                        .orElse("No Team");
+
+            case "team_color":
+                return plugin.teamManager.getPlayerTeam(player)
+                        .map(team -> team.getColor().toString())
+                        .orElse("");
+
+            case "team_color_code":
+                return plugin.teamManager.getPlayerTeam(player)
+                        .map(team -> "&" + team.getColor().getChar())
+                        .orElse("&f");
+
+            case "team_size":
+                return plugin.teamManager.getPlayerTeam(player)
+                        .map(team -> String.valueOf(team.size()))
+                        .orElse("0");
+
+            case "team_alive_count":
+                return plugin.teamManager.getPlayerTeam(player)
+                        .map(team -> String.valueOf(team.getMembers().stream()
+                                .map(Bukkit::getPlayer)
+                                .filter(Objects::nonNull)
+                                .filter(p -> !plugin.isEliminated(p))
+                                .count()))
+                        .orElse("0");
+
+            case "team_eliminated_count":
+                return plugin.teamManager.getPlayerTeam(player)
+                        .map(team -> String.valueOf(team.getMembers().stream()
+                                .map(Bukkit::getPlayer)
+                                .filter(Objects::nonNull)
+                                .filter(plugin::isEliminated)
+                                .count()))
+                        .orElse("0");
 
             default:
                 return null;
