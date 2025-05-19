@@ -11,7 +11,7 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
-import org.bukkit.entity.EntityType;
+import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.entity.Firework;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -37,7 +37,6 @@ public final class EventTools extends JavaPlugin implements Listener {
     private EventToolsExpansion expansion;
 
     final Set<UUID> eliminatedPlayers = ConcurrentHashMap.newKeySet();
-    private final Set<UUID> disconnectedPlayers = ConcurrentHashMap.newKeySet();
     final List<UUID> eliminationOrder = Collections.synchronizedList(new ArrayList<>());
     final Map<UUID, Boolean> votes = new ConcurrentHashMap<>();
 
@@ -56,18 +55,35 @@ public final class EventTools extends JavaPlugin implements Listener {
     volatile int voteTimeRemaining;
     long eventStartTime;
 
+    private enum EventType {
+        PURE_FFA,
+        HYBRID_FFA,
+        TEAM_BATTLE
+    }
+    private volatile EventType eventType;
+
     private FileConfiguration config;
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
         config = getConfig();
+
         getLogger().info("EventTools has been enabled!");
+
         registerCommands();
+
+        org.bukkit.scoreboard.Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
+        scoreboard.getTeams().stream()
+                .filter(team -> team.getName().startsWith("evt_"))
+                .forEach(org.bukkit.scoreboard.Team::unregister);
+
         getServer().getPluginManager().registerEvents(this, this);
         this.zoneManager = new ZoneManager(this);
         this.teamManager = new TeamManager(this);
+
         this.zoneManager.startParticleRenderer();
+
         if (Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI")) {
             this.expansion = new EventToolsExpansion(this);
             this.expansion.register();
@@ -105,11 +121,6 @@ public final class EventTools extends JavaPlugin implements Listener {
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
         try {
-            if (!sender.hasPermission("eventtools.admin")) {
-                sendMessage(sender, config.getString("messages.no-permission", "&cNo permission"));
-                return true;
-            }
-
             switch (cmd.getName().toLowerCase()) {
                 case "seteventspawn": return handleSetSpawn(sender);
                 case "startevent": return handleStartEvent(sender, args);
@@ -137,35 +148,90 @@ public final class EventTools extends JavaPlugin implements Listener {
                 default: return false;
             }
         } catch (Exception e) {
-            getLogger().severe("Command error: " + e.getMessage());
-            sendMessage(sender, "&cCommand failed: " + e.getMessage());
-            return true;
+            sendMessage(sender, "&cAn error occurred. Please check console for details.");
+            getLogger().severe("Command error (" + sender.getName() + "): " + e.getMessage());
+            e.printStackTrace();
         }
+        return true;
+    }
+
+    private List<Player> getTargetPlayers(CommandSender sender, String target) {
+        List<Player> targets = new ArrayList<>();
+
+        if (target.startsWith("@")) {
+            String teamName = target.substring(1);
+            Team team = teamManager.getTeam(teamName);
+            if (team != null) {
+                targets.addAll(team.getOnlineMembers());
+            }
+        } else {
+            switch (target.toLowerCase()) {
+                case "all":
+                    targets.addAll(Bukkit.getOnlinePlayers());
+                    break;
+                case "alive":
+                    Bukkit.getOnlinePlayers().stream()
+                            .filter(p -> !isEliminated(p))
+                            .forEach(targets::add);
+                    break;
+                case "eliminated":
+                    Bukkit.getOnlinePlayers().stream()
+                            .filter(this::isEliminated)
+                            .forEach(targets::add);
+                    break;
+                default:
+                    Player player = Bukkit.getPlayer(target);
+                    if (player != null) {
+                        targets.add(player);
+                    }
+            }
+        }
+
+        if (sender instanceof Player) {
+            targets.remove(sender);
+        }
+
+        targets.removeIf(p -> p.hasPermission("eventtools.bypass"));
+
+        return targets;
     }
 
     private boolean handleSetSpawn(CommandSender sender) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (!(sender instanceof Player)) {
             sendMessage(sender, "&cOnly players can set spawn!");
             return true;
         }
         spawnLocation = ((Player) sender).getLocation();
 
-        sendMessage(sender, "&aSpawn set at your location!");
+        sendMessage(sender, "&eSpawn set at your location!");
         return true;
     }
 
     private boolean handleStartEvent(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (eventActive) {
             sendMessage(sender, "&cEvent is already running!");
+            return true;
+        }
+
+        List<Player> players = Bukkit.getOnlinePlayers().stream()
+                .filter(p -> !p.hasPermission("eventtools.bypass"))
+                .collect(Collectors.toList());
+        if (players.size() < 2) {
+            sendMessage(sender, "&cYou need at least &e2 &cplayers to start an event!");
             return true;
         }
 
         eliminatedPlayers.clear();
         eliminationOrder.clear();
         eventStartTime = System.currentTimeMillis();
-        eventActive = true;
-        chatMuted = false;
-        numberGuessActive = false;
         votes.clear();
 
         eventTitle = args.length > 0 ? String.join(" ", args) : "Event";
@@ -174,13 +240,17 @@ public final class EventTools extends JavaPlugin implements Listener {
             List<Team> activeTeams = teamManager.getActiveTeams();
 
             if (activeTeams.isEmpty()) {
-                new ArrayList<>(teamManager.getTeamNames()).forEach(teamManager::deleteTeam);
-                broadcastMessage("&6&lEVENT STARTED! &eFree-for-all mode (no players in teams)");
+                List<String> teamNames = new ArrayList<>(teamManager.getTeamNames());
+                teamNames.forEach(teamManager::deleteTeam);
+                broadcastMessage("&6&lEVENT STARTED! &eFree-for-all mode!");
             }
-            else if (activeTeams.size() < 2) {
-                sendMessage(sender, "&cYou need at least 2 teams with players to start a team event!");
-                eventActive = false;
-                return true;
+            else if (activeTeams.size() == 1) {
+                Team team = activeTeams.get(0);
+                broadcastMessage("&6&lEVENT STARTED! &eFree-for-all mode!");
+                broadcastMessage(team.getColor() + team.getName() +
+                        " &7playing as a group against unassigned players");
+
+                eventType = EventType.HYBRID_FFA;
             }
             else {
                 List<Player> unassignedPlayers = Bukkit.getOnlinePlayers().stream()
@@ -190,33 +260,34 @@ public final class EventTools extends JavaPlugin implements Listener {
 
                 if (!unassignedPlayers.isEmpty()) {
                     teamManager.balanceTeams();
-                    broadcastMessage("&aBalanced " + unassignedPlayers.size() + " unassigned players across teams");
+                    broadcastMessage("&aBalanced &e" + unassignedPlayers.size() + " &aunassigned players");
                 }
 
-                broadcastMessage("&6&lTEAM EVENT STARTED! &e" + activeTeams.size() + " teams competing!");
+                broadcastMessage("&6&lEVENT STARTED! &e" + activeTeams.size() + " teams competing!");
+                eventType = EventType.TEAM_BATTLE;
             }
         } else {
             broadcastMessage("&6&lEVENT STARTED! &eFree-for-all mode!");
+            eventType = EventType.PURE_FFA;
         }
 
-        Bukkit.getOnlinePlayers().forEach(player -> {
-            player.playSound(
-                    player.getLocation(),
-                    Sound.ENTITY_ENDER_DRAGON_GROWL,
-                    1.0f,
-                    0.5f
-            );
-        });
+        eventActive = true;
+        chatMuted = false;
+        numberGuessActive = false;
+        broadcastSound(Sound.ENTITY_ENDER_DRAGON_GROWL, 1, 1);
 
         broadcastTitle(
                 config.getString("messages.event-start-title", "§6Event started!"),
                 config.getString("messages.event-start-subtitle", "§eGood luck!")
         );
-
         return true;
     }
 
     private boolean handleStopEvent(CommandSender sender) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (!eventActive) {
             sendMessage(sender, "&cNo event is currently running!");
             return true;
@@ -237,89 +308,110 @@ public final class EventTools extends JavaPlugin implements Listener {
             sendMessage(sender, "&cOnly players can use this command!");
             return true;
         }
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (args.length != 1) {
-            sendMessage(sender, "&cUsage: /bring <player|all|alive|eliminated>");
+            sendMessage(sender, "&cUsage: /bring <player|all|alive|eliminated|@team>");
             return true;
         }
 
         Player senderPlayer = (Player) sender;
-        int brought = 0;
-        String target = args[0].toLowerCase();
+        List<Player> targets = getTargetPlayers(sender, args[0])
+                .stream()
+                .filter(p -> !p.equals(senderPlayer))
+                .filter(p -> !p.hasPermission("eventtools.bypass"))
+                .collect(Collectors.toList());
 
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            if (player.equals(senderPlayer)) continue;
-
-            boolean shouldBring = switch (target) {
-                case "all" -> true;
-                case "alive" -> !isEliminated(player);
-                case "eliminated" -> isEliminated(player);
-                default -> player.getName().equalsIgnoreCase(args[0]);
-            };
-
-            if (shouldBring) {
-                safeTeleport(player, senderPlayer.getLocation());
-                sendMessage(player, "&aYou were brought to " + sender.getName());
-                brought++;
+        if (targets.isEmpty()) {
+            if (args[0].equalsIgnoreCase(senderPlayer.getName())) {
+                sendMessage(sender, "&cYou can't bring yourself!");
             }
-        }
-
-        if (brought == 0 && !target.matches("all|alive|eliminated")) {
-            sendMessage(sender, "&cPlayer not found!");
+            else if (getTargetPlayers(sender, args[0]).stream()
+                    .anyMatch(p -> p.hasPermission("eventtools.bypass"))) {
+                sendMessage(sender, "&cYou can't bring that player!");
+            }
+            else {
+                sendMessage(sender, "&cNo matching players found!");
+            }
             return true;
         }
 
-        String targetName = target.matches("all|alive|eliminated") ?
-                brought + " player" + (brought != 1 ? "s" : "") :
-                Bukkit.getPlayer(args[0]) != null ? Bukkit.getPlayer(args[0]).getName() : "target";
-        sendMessage(sender, String.format("&aBrought %s to you!", targetName));
+        for (Player target : targets) {
+            safeTeleport(target, senderPlayer.getLocation());
+            sendMessage(target, "&aYou were brought to " + sender.getName());
+        }
+
+        String targetName;
+        if (args[0].startsWith("@")) {
+            targetName = "team " + args[0].substring(1);
+        } else {
+            targetName = args[0].matches("all|alive|eliminated") ?
+                    targets.size() + " players" : args[0];
+        }
+
+        sendMessage(sender, String.format("&eBrought %s to you!", targetName));
         return true;
     }
 
     private boolean handleHeal(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (args.length != 1) {
-            sendMessage(sender, "&cUsage: /heal <player|all|alive|eliminated>");
+            sendMessage(sender, "&cUsage: /heal <player|all|alive|eliminated|@team>");
             return true;
         }
 
-        int healed = 0;
-        String target = args[0].toLowerCase();
+        List<Player> targets = getTargetPlayers(sender, args[0])
+                .stream()
+                .filter(p -> !(sender instanceof Player && p.equals((Player)sender)))
+                .filter(p -> !p.hasPermission("eventtools.bypass"))
+                .collect(Collectors.toList());
 
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            if (player.equals(sender)) continue;
-
-            boolean shouldHeal = switch (target) {
-                case "all" -> true;
-                case "alive" -> !isEliminated(player);
-                case "eliminated" -> isEliminated(player);
-                default -> player.getName().equalsIgnoreCase(args[0]);
-            };
-
-            if (shouldHeal) {
-                healPlayer(player);
-                sendMessage(player, "&aYou have been healed!");
-                healed++;
+        if (targets.isEmpty()) {
+            if (args[0].equalsIgnoreCase(sender.getName())) {
+                sendMessage(sender, "&cYou can't heal yourself!");
             }
-        }
-
-        if (healed == 0 && !target.matches("all|alive|eliminated")) {
-            sendMessage(sender, "&cPlayer not found!");
+            else if (getTargetPlayers(sender, args[0]).stream().anyMatch(p -> p.hasPermission("eventtools.bypass"))) {
+                sendMessage(sender, "&cYou can't heal that player!");
+            }
+            else {
+                sendMessage(sender, "&cNo matching players found!");
+            }
             return true;
         }
 
-        String targetName = target.matches("all|alive|eliminated") ?
-                healed + " player" + (healed != 1 ? "s" : "") :
-                Bukkit.getPlayer(args[0]) != null ? Bukkit.getPlayer(args[0]).getName() : "target";
+        for (Player player : targets) {
+            healPlayer(player);
+            sendMessage(player, "&aYou have been healed!");
+        }
+
+        String targetName;
+        if (args[0].startsWith("@")) {
+            targetName = "team " + args[0].substring(1);
+        } else {
+            targetName = args[0].matches("all|alive|eliminated") ?
+                    targets.size() + " players" : args[0];
+        }
+
         sendMessage(sender, String.format("&aHealed %s!", targetName));
         return true;
     }
 
     private boolean handleGiveItem(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (!(sender instanceof Player)) {
             sendMessage(sender, "&cOnly players can use this command!");
             return true;
         }
         if (args.length < 1) {
-            sendMessage(sender, "&cUsage: /giveitem <player|all|alive|eliminated> [amount]");
+            sendMessage(sender, "&cUsage: /giveitem <player|all|alive|eliminated|@team> [amount]");
             return true;
         }
 
@@ -330,87 +422,103 @@ public final class EventTools extends JavaPlugin implements Listener {
             return true;
         }
 
+        List<Player> targets = getTargetPlayers(sender, args[0])
+                .stream()
+                .filter(p -> !p.equals(givingPlayer))
+                .filter(p -> !p.hasPermission("eventtools.bypass"))
+                .collect(Collectors.toList());
+
+        if (targets.isEmpty()) {
+            if (args[0].equalsIgnoreCase(sender.getName())) {
+                sendMessage(sender, "&cYou can't give items to yourself!");
+            }
+            else if (getTargetPlayers(sender, args[0]).stream().anyMatch(p -> p.hasPermission("eventtools.bypass"))) {
+                sendMessage(sender, "&cYou can't give items to that player!");
+            }
+            else {
+                sendMessage(sender, "&cNo matching players found!");
+            }
+            return true;
+        }
+
         int amount = args.length >= 2 ? parseInt(args[1], 1) : 1;
         ItemStack toGive = item.clone();
         toGive.setAmount(amount);
 
-        int given = 0;
-        String target = args[0].toLowerCase();
-
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            if (player.equals(givingPlayer)) continue;
-
-            boolean shouldGive = switch (target) {
-                case "all" -> true;
-                case "alive" -> !isEliminated(player);
-                case "eliminated" -> isEliminated(player);
-                default -> player.getName().equalsIgnoreCase(args[0]);
-            };
-
-            if (shouldGive) {
-                player.getInventory().addItem(toGive.clone());
-                sendMessage(player, "&aYou received an item from " + sender.getName());
-                given++;
-            }
+        for (Player player : targets) {
+            player.getInventory().addItem(toGive.clone());
+            sendMessage(player, "&aYou received an item from " + sender.getName());
         }
 
-        if (given == 0 && !target.matches("all|alive|eliminated")) {
-            sendMessage(sender, "&cPlayer not found!");
-            return true;
+        String targetName;
+        if (args[0].startsWith("@")) {
+            targetName = "team " + args[0].substring(1);
+        } else {
+            targetName = args[0].matches("all|alive|eliminated") ?
+                    targets.size() + " players" : args[0];
         }
 
-        String targetName = target.matches("all|alive|eliminated") ?
-                given + " player" + (given != 1 ? "s" : "") :
-                Bukkit.getPlayer(args[0]) != null ? Bukkit.getPlayer(args[0]).getName() : "target";
-        sendMessage(sender, String.format("&aGave item to %s!", targetName));
+        sendMessage(sender, String.format("&eGave item to %s!", targetName));
         return true;
     }
 
     private boolean handleClearInventory(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (args.length != 1) {
-            sendMessage(sender, "&cUsage: /clearinventory <player|all|alive|eliminated>");
+            sendMessage(sender, "&cUsage: /clearinventory <player|all|alive|eliminated|@team>");
             return true;
         }
 
-        int cleared = 0;
-        String target = args[0].toLowerCase();
+        List<Player> targets = getTargetPlayers(sender, args[0])
+                .stream()
+                .filter(p -> !(sender instanceof Player && p.equals((Player)sender)))
+                .filter(p -> !p.hasPermission("eventtools.bypass"))
+                .collect(Collectors.toList());
 
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            if (player.equals(sender)) continue;
-
-            boolean shouldClear = switch (target) {
-                case "all" -> true;
-                case "alive" -> !isEliminated(player);
-                case "eliminated" -> isEliminated(player);
-                default -> player.getName().equalsIgnoreCase(args[0]);
-            };
-
-            if (shouldClear) {
-                player.getInventory().clear();
-                sendMessage(player, "&cYour inventory was cleared!");
-                cleared++;
+        if (targets.isEmpty()) {
+            if (args[0].equalsIgnoreCase(sender.getName())) {
+                sendMessage(sender, "&cYou can't clear your own inventory!");
             }
-        }
-
-        if (cleared == 0 && !target.matches("all|alive|eliminated")) {
-            sendMessage(sender, "&cPlayer not found!");
+            else if (getTargetPlayers(sender, args[0]).stream().anyMatch(p -> p.hasPermission("eventtools.bypass"))) {
+                sendMessage(sender, "&cYou can't clear the inventory of that player!");
+            }
+            else {
+                sendMessage(sender, "&cNo matching players found!");
+            }
             return true;
         }
 
-        String targetName = target.matches("all|alive|eliminated") ?
-                cleared + " player" + (cleared != 1 ? "s" : "") :
-                Bukkit.getPlayer(args[0]) != null ? Bukkit.getPlayer(args[0]).getName() : "target";
-        sendMessage(sender, String.format("&aCleared inventory of %s!", targetName));
+        for (Player player : targets) {
+            player.getInventory().clear();
+            sendMessage(player, "&cYour inventory was cleared!");
+        }
+
+        String targetName;
+        if (args[0].startsWith("@")) {
+            targetName = "team " + args[0].substring(1);
+        } else {
+            targetName = args[0].matches("all|alive|eliminated") ?
+                    targets.size() + " players" : args[0];
+        }
+
+        sendMessage(sender, String.format("&eCleared inventory of %s!", targetName));
         return true;
     }
 
     private boolean handleEliminateCommand(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (!eventActive) {
             sendMessage(sender, "&cNo event is currently running!");
             return true;
         }
         if (args.length != 1) {
-            sendMessage(sender, "&cUsage: /eliminate <player|all>");
+            sendMessage(sender, "&cUsage: /eliminate <player|all|@team>");
             return true;
         }
 
@@ -418,16 +526,43 @@ public final class EventTools extends JavaPlugin implements Listener {
             int count = 0;
             List<Player> toEliminate = Bukkit.getOnlinePlayers().stream()
                     .filter(p -> !p.hasPermission("eventtools.bypass"))
+                    .filter(p -> !isEliminated(p))
                     .collect(Collectors.toList());
 
             for (Player player : toEliminate) {
                 handleElimination(player);
-
                 count++;
             }
 
-            sendMessage(sender, "&aEliminated " + count + " players!");
-            checkForEventEnd();
+            if (count == 0) {
+                sendMessage(sender, "&cAll players are already eliminated!");
+            } else {
+                sendMessage(sender, "&aEliminated " + count + " players!");
+            }
+            return true;
+        }
+
+        if (args[0].startsWith("@")) {
+            String teamName = args[0].substring(1);
+            Team team = teamManager.getTeam(teamName);
+            if (team == null) {
+                sendMessage(sender, "&cTeam not found!");
+                return true;
+            }
+
+            int count = 0;
+            for (Player player : team.getOnlineMembers()) {
+                if (!player.hasPermission("eventtools.bypass") && !isEliminated(player)) {
+                    handleElimination(player);
+                    count++;
+                }
+            }
+
+            if (count == 0) {
+                sendMessage(sender, "&cAll members of team " + team.getColor() + teamName + " &care already eliminated!");
+            } else {
+                sendMessage(sender, "&eEliminated " + count + " members of team " + team.getColor() + teamName);
+            }
             return true;
         }
 
@@ -440,30 +575,65 @@ public final class EventTools extends JavaPlugin implements Listener {
             sendMessage(sender, "&cYou can't eliminate this player!");
             return true;
         }
+        if (isEliminated(target)) {
+            sendMessage(sender, "&c" + target.getName() + " is already eliminated!");
+            return true;
+        }
 
         handleElimination(target);
+        checkForEventEnd();
         return true;
     }
 
     private boolean handleReviveCommand(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (!eventActive) {
             sendMessage(sender, "&cNo event is currently running!");
             return true;
         }
         if (args.length != 1) {
-            sendMessage(sender, "&cUsage: /revive <player|all>");
+            sendMessage(sender, "&cUsage: /revive <player|all|@team>");
             return true;
         }
 
         if (args[0].equalsIgnoreCase("all")) {
             int count = 0;
             for (Player player : Bukkit.getOnlinePlayers()) {
-                if (revivePlayer(sender, player)) {
+                if (!player.hasPermission("eventtools.bypass") && isEliminated(player)) {
+                    revivePlayer(sender, player);
                     count++;
                 }
             }
             broadcastMessage("&a" + count + " players have been revived!");
-            sendMessage(sender, "&aRevived " + count + " players!");
+            sendMessage(sender, "&eRevived " + count + " players!");
+            return true;
+        }
+
+        if (args[0].startsWith("@")) {
+            String teamName = args[0].substring(1);
+            Team team = teamManager.getTeam(teamName);
+            if (team == null) {
+                sendMessage(sender, "&cTeam not found!");
+                return true;
+            }
+
+            int count = 0;
+            for (Player player : team.getOnlineMembers()) {
+                if (!player.hasPermission("eventtools.bypass") && isEliminated(player)) {
+                    revivePlayer(sender, player);
+                    count++;
+                }
+            }
+
+            if (count == 0) {
+                sendMessage(sender, "&cNo eliminated members found in team " + team.getColor() + teamName);
+            } else {
+                broadcastMessage("&aRevived " + count + " members of team " + team.getColor() + teamName);
+                sendMessage(sender, "&eRevived " + count + " members of team " + team.getColor() + teamName);
+            }
             return true;
         }
 
@@ -481,6 +651,10 @@ public final class EventTools extends JavaPlugin implements Listener {
     }
 
     private boolean handleListCommand(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (args.length != 1) {
             sendMessage(sender, "&cUsage: /list <alive|eliminated|all>");
             return true;
@@ -523,58 +697,66 @@ public final class EventTools extends JavaPlugin implements Listener {
     }
 
     private boolean handleFreeze(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (args.length != 1) {
-            sendMessage(sender, "&cUsage: /freeze <player|all|alive|eliminated>");
+            sendMessage(sender, "&cUsage: /freeze <player|all|alive|eliminated|@team>");
             return true;
         }
 
-        int affected = 0;
-        String target = args[0].toLowerCase();
+        List<Player> targets = getTargetPlayers(sender, args[0])
+                .stream()
+                .filter(p -> !(sender instanceof Player && p.equals((Player) sender)))
+                .filter(p -> !p.hasPermission("eventtools.bypass"))
+                .collect(Collectors.toList());
 
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            if (player.equals(sender)) continue;
-
-            boolean shouldAffect = switch (target) {
-                case "all" -> true;
-                case "alive" -> !isEliminated(player);
-                case "eliminated" -> isEliminated(player);
-                default -> player.getName().equalsIgnoreCase(args[0]);
-            };
-
-            if (shouldAffect) {
-                boolean currentlyFrozen = player.getWalkSpeed() == 0;
-                freezePlayer(player, !currentlyFrozen);
-                affected++;
+        if (targets.isEmpty()) {
+            if (args[0].equalsIgnoreCase(sender.getName())) {
+                sendMessage(sender, "&cYou can't freeze yourself!");
             }
-        }
-
-        if (affected == 0 && !target.matches("all|alive|eliminated")) {
-            sendMessage(sender, "&cPlayer not found!");
+            else if (getTargetPlayers(sender, args[0]).stream().anyMatch(p -> p.hasPermission("eventtools.bypass"))) {
+                sendMessage(sender, "&cYou can't freeze that player!");
+            }
+            else {
+                sendMessage(sender, "&cNo matching players found!");
+            }
             return true;
         }
 
-        String targetName = target.matches("all|alive|eliminated") ?
-                affected + " player" + (affected != 1 ? "s" : "") :
-                Bukkit.getPlayer(args[0]) != null ? Bukkit.getPlayer(args[0]).getName() : "target";
+        boolean anyFrozen = false;
+        for (Player player : targets) {
+            boolean currentlyFrozen = player.getWalkSpeed() == 0;
+            freezePlayer(player, !currentlyFrozen);
+            anyFrozen = anyFrozen || !currentlyFrozen;
+        }
 
-        boolean anyFrozen = Bukkit.getOnlinePlayers().stream()
-                .anyMatch(p -> p.getWalkSpeed() == 0);
+        String targetName;
+        if (args[0].startsWith("@")) {
+            targetName = "team " + args[0].substring(1);
+        } else {
+            targetName = args[0].matches("all|alive|eliminated") ?
+                    targets.size() + " players" : args[0];
+        }
+
         String action = anyFrozen ? "Froze" : "Unfroze";
-
-        sendMessage(sender, String.format("&a%s %s!", action, targetName));
+        sendMessage(sender, String.format("&e%s %s!", action, targetName));
         return true;
     }
 
     private boolean handleTimedEffect(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (args.length < 3) {
-            sendMessage(sender, "&cUsage: /timedeffect <effect> <duration> [amplifier] <player|all|alive|eliminated>");
-            sendMessage(sender, "&7Example: /timedeffect speed 30 1 all");
+            sendMessage(sender, "&cUsage: /timedeffect <effect> <duration> [amplifier] <player|all|alive|eliminated|@team>");
             return true;
         }
 
         try {
             PotionEffectType type = PotionEffectType.getByName(args[0].toUpperCase());
-            if (type == null) throw new IllegalArgumentException();
 
             int durationArgPos = 1;
             int amplifierArgPos = 2;
@@ -587,46 +769,46 @@ public final class EventTools extends JavaPlugin implements Listener {
 
             int duration = parseInt(args[durationArgPos], 1) * 20;
             int amplifier = args.length >= 4 ? parseInt(args[amplifierArgPos], 0) : 0;
-            int applied = 0;
-            String target = args[targetArgPos].toLowerCase();
 
-            for (Player player : Bukkit.getOnlinePlayers()) {
-                if (player.equals(sender)) continue;
+            List<Player> targets = getTargetPlayers(sender, args[targetArgPos])
+                    .stream()
+                    .filter(p -> !(sender instanceof Player && p.equals((Player) sender)))
+                    .filter(p -> !p.hasPermission("eventtools.bypass"))
+                    .collect(Collectors.toList());
 
-                boolean shouldApply = switch (target) {
-                    case "all" -> true;
-                    case "alive" -> !isEliminated(player);
-                    case "eliminated" -> isEliminated(player);
-                    default -> player.getName().equalsIgnoreCase(args[targetArgPos]);
-                };
-
-                if (shouldApply) {
-                    player.addPotionEffect(new PotionEffect(type, duration, amplifier));
-                    applied++;
-                    sendMessage(player, String.format(
-                            "&aYou received %s %s for %s seconds!",
-                            amplifier > 0 ? "level " + (amplifier + 1) : "",
-                            type.getName().toLowerCase().replace("_", " "),
-                            duration / 20
-                    ));
+            if (targets.isEmpty()) {
+                if (args[targetArgPos].equalsIgnoreCase(sender.getName())) {
+                    sendMessage(sender, "&cYou can't apply effects to yourself!");
                 }
-            }
-
-            if (applied == 0 && !target.matches("all|alive|eliminated")) {
-                sendMessage(sender, "&cPlayer not found!");
+                else if (getTargetPlayers(sender, args[targetArgPos]).stream().anyMatch(p -> p.hasPermission("eventtools.bypass"))) {
+                    sendMessage(sender, "&cYou can't apply effects to that player!");
+                }
+                else {
+                    sendMessage(sender, "&cNo matching players found!");
+                }
                 return true;
             }
 
+            for (Player player : targets) {
+                player.addPotionEffect(new PotionEffect(type, duration, amplifier));
+                sendMessage(player, String.format(
+                        "&aYou received %s %s for %s seconds!",
+                        amplifier > 0 ? "level " + (amplifier + 1) : "",
+                        type.getName().toLowerCase().replace("_", " "),
+                        duration / 20
+                ));
+            }
+
             String targetName;
-            if (target.matches("all|alive|eliminated")) {
-                targetName = applied + " player" + (applied != 1 ? "s" : "");
+            if (args[targetArgPos].startsWith("@")) {
+                targetName = "team " + args[targetArgPos].substring(1);
             } else {
-                Player targetPlayer = Bukkit.getPlayer(args[targetArgPos]);
-                targetName = targetPlayer != null ? targetPlayer.getName() : "unknown player";
+                targetName = args[targetArgPos].matches("all|alive|eliminated") ?
+                        targets.size() + " players" : args[targetArgPos];
             }
 
             sendMessage(sender, String.format(
-                    "&aApplied %s (level %d) to %s for %d seconds!",
+                    "&eApplied %s (level %d) to %s for %d seconds!",
                     type.getName(),
                     amplifier + 1,
                     targetName,
@@ -634,37 +816,56 @@ public final class EventTools extends JavaPlugin implements Listener {
             ));
         } catch (Exception e) {
             sendMessage(sender, "&cInvalid effect, duration or amplifier!");
-            sendMessage(sender, "&7Example: /timedeffect speed 30 1 all");
-            sendMessage(sender, "&7Example: /timedeffect jump_boost 15 alive");
         }
         return true;
     }
 
     private boolean handleInvSee(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (!(sender instanceof Player)) {
             sendMessage(sender, "&cOnly players can use this command!");
             return true;
         }
-
         if (args.length != 1) {
             sendMessage(sender, "&cUsage: /invsee <player>");
             return true;
         }
 
         Player admin = (Player) sender;
-        Player target = Bukkit.getPlayer(args[0]);
 
-        if (target == null || target.equals(admin)) {
-            sendMessage(sender, "&cInvalid player!");
+        List<Player> targets = getTargetPlayers(sender, args[0])
+                .stream()
+                .filter(p -> !p.equals(admin))
+                .filter(p -> !p.hasPermission("eventtools.bypass"))
+                .collect(Collectors.toList());
+
+        if (targets.isEmpty()) {
+            if (args[0].equalsIgnoreCase(admin.getName())) {
+                sendMessage(sender, "&cYou can't view your own inventory!");
+            }
+            else if (Bukkit.getPlayer(args[0]) != null && Bukkit.getPlayer(args[0]).hasPermission("eventtools.bypass")) {
+                sendMessage(sender, "&cYou can't view that player's inventory!");
+            }
+            else {
+                sendMessage(sender, "&cPlayer not found!");
+            }
             return true;
         }
 
+        Player target = targets.get(0);
         admin.openInventory(target.getInventory());
-        sendMessage(sender, "&aViewing " + target.getName() + "'s inventory");
+        sendMessage(sender, "&eViewing " + target.getName() + "'s inventory");
         return true;
     }
 
     private boolean handleStartVote(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (voteInProgress) {
             sendMessage(sender, "&cA vote is already in progress!");
             return true;
@@ -704,6 +905,10 @@ public final class EventTools extends JavaPlugin implements Listener {
     }
 
     private boolean handleEndVote(CommandSender sender) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (!voteInProgress) {
             sendMessage(sender, "&cNo vote is currently running!");
             return true;
@@ -714,6 +919,10 @@ public final class EventTools extends JavaPlugin implements Listener {
     }
 
     private boolean handleCountdown(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (args.length != 1) {
             sendMessage(sender, "&cUsage: /countdown <seconds>");
             return true;
@@ -726,19 +935,14 @@ public final class EventTools extends JavaPlugin implements Listener {
 
                 @Override
                 public void run() {
-                    Bukkit.getOnlinePlayers().forEach(p -> {
-                        String title = timeLeft <= 3 ? "§c" + timeLeft : "§e" + timeLeft;
-                        p.sendTitle(title, "", 5, 20, 5);
+                    String title = timeLeft <= 3 ? "§c" + timeLeft : "§e" + timeLeft;
+                    broadcastTitle(title, "");
 
-                        float pitch = 1.0f + (1.0f - (timeLeft / (float)seconds));
-                        p.playSound(p.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 1.0f, pitch);
-                    });
+                    broadcastSound(Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1, 0);
 
                     if (timeLeft <= 0) {
-                        Bukkit.getOnlinePlayers().forEach(p -> {
-                            p.sendTitle("§aGO!", "§7The event begins!", 10, 40, 10);
-                            p.playSound(p.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.5f);
-                        });
+                        broadcastTitle("&aGO!", "");
+                        broadcastSound(Sound.ENTITY_PLAYER_LEVELUP, 1,1.5f);
                         cancel();
                         return;
                     }
@@ -753,6 +957,10 @@ public final class EventTools extends JavaPlugin implements Listener {
     }
 
     private boolean handleNumberGuess(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (numberGuessActive) {
             sendMessage(sender, "&cA number guess game is already active!");
             return true;
@@ -778,20 +986,32 @@ public final class EventTools extends JavaPlugin implements Listener {
     }
 
     private boolean handleMuteChat(CommandSender sender) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         chatMuted = !chatMuted;
         broadcastMessage(chatMuted ? "&cChat has been muted!" : "&aChat has been unmuted!");
         return true;
     }
 
     private boolean handleClearChat(CommandSender sender) {
-        for (int i = 0; i < 100; i++) {
-            Bukkit.broadcastMessage("");
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
         }
-        broadcastMessage("&7Chat has been cleared by " + sender.getName());
+        for (int i = 0; i < 100; i++) {
+            broadcastMessage("");
+        }
+        broadcastMessage("&8Chat has been cleared by " + sender.getName());
         return true;
     }
 
     private boolean handleZoneCommand(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (!(sender instanceof Player)) {
             sendMessage(sender, "&cOnly players can use zone commands!");
             return true;
@@ -808,10 +1028,14 @@ public final class EventTools extends JavaPlugin implements Listener {
                 return handleZoneCreate(player, args);
             case "delete":
                 return handleZoneDelete(player, args);
-            case "list":
-                return handleZoneList(player);
+            case "info":
+                return handleZoneInfo(player);
             case "toggle":
                 return handleZoneToggle(player, args);
+            case "resize":
+                return handleZoneResize(player, args);
+            case "movehere":
+                return handleZoneMoveHere(player, args);
             default:
                 sendZoneHelp(sender);
                 return true;
@@ -820,7 +1044,8 @@ public final class EventTools extends JavaPlugin implements Listener {
 
     private boolean handleZoneCreate(Player sender, String[] args) {
         if (args.length < 5) {
-            sendMessage(sender, "&cUsage: /zone create <name> <circle|square> <radius> <effect|must_stay|safe> [effect:amplifier]");
+            sendMessage(sender, "&cUsage: /zone create <name> <circle|square> <radius> <type> [args]");
+            sendMessage(sender, "&7Types: effect(<effect:level>,<effect2:level>), damage(<amount>), safe, must_stay, team_only(<team>)");
             return true;
         }
 
@@ -830,32 +1055,77 @@ public final class EventTools extends JavaPlugin implements Listener {
             int radius = Math.min(Integer.parseInt(args[3]), 50);
             ZoneType type = ZoneType.valueOf(args[4].toUpperCase());
 
-            PotionEffect effect = null;
-            if (type == ZoneType.EFFECT) {
-                if (args.length < 6) {
-                    sendMessage(sender, "&cEffect zones require an effect! Example: /zone create speedzone circle 10 effect speed:1");
-                    return true;
-                }
-                String[] effectParts = args[5].split(":");
-                PotionEffectType effectType = PotionEffectType.getByName(effectParts[0].toUpperCase());
-                if (effectType == null) throw new IllegalArgumentException();
-                int amplifier = effectParts.length > 1 ? Integer.parseInt(effectParts[1]) : 0;
-                effect = new PotionEffect(effectType, Integer.MAX_VALUE, amplifier);
-            } else if (args.length > 5) {
-                sendMessage(sender, "&cOnly effect zones need additional arguments!");
-                return true;
+            List<PotionEffect> effects = new ArrayList<>();
+            double damage = 0;
+            String teamName = null;
+
+            switch (type) {
+                case EFFECT:
+                    if (args.length < 6) {
+                        sendMessage(sender, "&cEffect zones require effects! Example: speed:1,jump_boost:2");
+                        return true;
+                    }
+                    for (String effectStr : args[5].split(",")) {
+                        String[] parts = effectStr.split(":");
+                        PotionEffectType effectType = PotionEffectType.getByName(parts[0].toUpperCase());
+                        int amplifier = parts.length > 1 ? Integer.parseInt(parts[1]) : 0;
+                        effects.add(new PotionEffect(effectType, Integer.MAX_VALUE, amplifier));
+                    }
+                    break;
+
+                case DAMAGE:
+                    if (args.length < 6) {
+                        sendMessage(sender, "&cDamage zones require damage amount! Example: damage 2.5");
+                        return true;
+                    }
+                    damage = Double.parseDouble(args[5]);
+                    break;
+
+                case TEAM_ONLY:
+                    if (args.length < 6) {
+                        sendMessage(sender, "&cTeam zones require team name! Example: team_only red");
+                        return true;
+                    }
+                    teamName = args[5];
+                    if (teamManager.getTeam(teamName) == null) {
+                        sendMessage(sender, "&cTeam '" + teamName + "' doesn't exist!");
+                        return true;
+                    }
+                    break;
+
+                default:
+                    if (args.length > 5) {
+                        sendMessage(sender, "&cOnly effect, damage, and team_only zones need extra arguments!");
+                        return true;
+                    }
             }
 
-            EventZone zone = new EventZone(name, sender.getLocation(), shape, radius, type, effect);
+            EventZone zone = new EventZone(name, sender.getLocation(), shape, radius,
+                    type, effects, damage, teamManager);
+
+            if (type == ZoneType.TEAM_ONLY) {
+                zone.setAllowedTeam(teamName);
+            }
+
             zoneManager.addZone(zone);
 
+            String extraInfo = "";
+            if (type == ZoneType.TEAM_ONLY) {
+                extraInfo = " &7(Team: " + teamName + ")";
+            } else if (type == ZoneType.DAMAGE) {
+                extraInfo = " &7(Damage: " + damage + " hearts/sec)";
+            } else if (type == ZoneType.EFFECT) {
+                extraInfo = " &7(Effects: " + args[5] + ")";
+            }
+
             sendMessage(sender, String.format(
-                    "&aCreated %s zone '%s' (Radius: %d) at your location!",
-                    type.name().toLowerCase(), name, radius
+                    "&eCreated %s zone '%s' &8(Radius: %d)%s",
+                    type.name().toLowerCase(), name, radius, extraInfo
             ));
             return true;
+
         } catch (IllegalArgumentException e) {
-            sendMessage(sender, "&cInvalid arguments! Valid zone types: effect, must_stay, safe");
+            sendMessage(sender, "&cInvalid arguments! Error: " + e.getMessage());
             return true;
         }
     }
@@ -867,46 +1137,215 @@ public final class EventTools extends JavaPlugin implements Listener {
         }
 
         if (zoneManager.removeZone(args[1])) {
-            sendMessage(sender, "&aDeleted zone '" + args[1] + "'");
+            sendMessage(sender, "&eDeleted zone '" + args[1] + "'");
         } else {
             sendMessage(sender, "&cZone not found!");
         }
         return true;
     }
 
-    private boolean handleZoneList(Player sender) {
+    private boolean handleZoneInfo(Player sender) {
         List<String> zones = zoneManager.getZoneNames();
         if (zones.isEmpty()) {
-            sendMessage(sender, "&7No active zones");
+            sendMessage(sender, "&7No zones available. Use &e/zone create &7to create some!");
             return true;
         }
 
-        StringBuilder message = new StringBuilder("&6Active Zones:\n");
+        StringBuilder message = new StringBuilder("&6Zones:\n");
         for (String zoneName : zones) {
             EventZone zone = zoneManager.getZone(zoneName);
-            message.append(String.format(
-                    "&7- &e%s &7(Type: %s, Radius: %d, Location: %d,%d,%d)\n",
-                    zoneName,
-                    zone.getType(),
-                    zone.getRadius(),
-                    zone.getCenter().getBlockX(),
-                    zone.getCenter().getBlockY(),
-                    zone.getCenter().getBlockZ()
-            ));
+
+            message.append("&e")
+                    .append(zone.getName())
+                    .append(" &7(")
+                    .append(zone.getType());
+
+            if (zone.getType() == ZoneType.TEAM_ONLY && zone.getAllowedTeam() != null) {
+                Team team = teamManager.getTeam(zone.getAllowedTeam());
+                ChatColor teamColor = team != null ? team.getColor() : ChatColor.WHITE;
+                message.append(" - ").append(teamColor).append(zone.getAllowedTeam());
+            }
+
+            message.append(")");
+
+            message.append("\n&8> &7Status: ")
+                    .append(zone.isActive() ? "&aActive" : "&cInactive")
+                    .append("&7, Radius: ")
+                    .append(zone.getRadius())
+                    .append("&7, Shape: ")
+                    .append(zone.getShape());
+
+            Location center = zone.getCenter();
+            message.append("\n&8> &7Location: ")
+                    .append(center.getWorld().getName())
+                    .append(" &8(")
+                    .append(center.getBlockX())
+                    .append(", ")
+                    .append(center.getBlockY())
+                    .append(", ")
+                    .append(center.getBlockZ())
+                    .append(")");
+
+            Set<Player> playersInZone = zone.getPlayersInside();
+            message.append("\n&8> &7Players: ");
+            if (playersInZone.isEmpty()) {
+                message.append("&7None");
+            } else {
+                message.append(playersInZone.stream()
+                        .map(Player::getName)
+                        .collect(Collectors.joining("&7, ")));
+            }
+
+            message.append("\n");
         }
+
         sendMessage(sender, message.toString());
         return true;
     }
 
-    private void sendZoneHelp(CommandSender sender) {
-        sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                "&6Zone Commands:\n" +
-                        "&e/zone create <name> <circle|square> <radius> <effect|must_stay|safe> [effect:amplifier]\n" +
-                        "&e/zone delete <name>\n" +
-                        "&e/zone list\n" +
-                        "&e/zone toggle <name>\n" +
-                        "&7Example: /zone create speed_zone circle 15 effect speed:1"
+    private boolean handleZoneMoveHere(Player sender, String[] args) {
+        if (args.length < 2) {
+            sendMessage(sender, "&cUsage: /zone movehere <name>");
+            return true;
+        }
+
+        String zoneName = args[1];
+        EventZone zone = zoneManager.getZone(zoneName);
+
+        if (zone == null) {
+            sendMessage(sender, "&cZone '" + zoneName + "' not found!");
+            return true;
+        }
+
+        EventZone newZone = new EventZone(
+                zone.getName(),
+                sender.getLocation(),
+                zone.getShape(),
+                zone.getRadius(),
+                zone.getType(),
+                zone.getEffects(),
+                zone.getDamage(),
+                teamManager
+        );
+
+        if (zone.getType() == ZoneType.TEAM_ONLY) {
+            newZone.setAllowedTeam(zone.getAllowedTeam());
+        }
+
+        zoneManager.removeZone(zone.getName());
+        zoneManager.addZone(newZone);
+
+        sendMessage(sender, String.format(
+                "&eMoved zone '%s' to your current location!",
+                zoneName
         ));
+        return true;
+    }
+
+    private boolean handleZoneResize(Player sender, String[] args) {
+        if (args.length < 3) {
+            sendMessage(sender, "&cUsage: /zone resize <name> <radius> [stepCount]");
+            return true;
+        }
+
+        String zoneName = args[1];
+        EventZone zone = zoneManager.getZone(zoneName);
+
+        if (zone == null) {
+            sendMessage(sender, "&cZone '" + zoneName + "' not found!");
+            return true;
+        }
+
+        try {
+            int newRadius = Integer.parseInt(args[2]);
+            newRadius = Math.min(newRadius, 50);
+
+            int stepCount = 1;
+            if (args.length >= 4) {
+                stepCount = Math.min(Integer.parseInt(args[3]), 300);
+                if (stepCount <= 0) {
+                    sendMessage(sender, "&cStep count must be positive! (1-60)");
+                    return true;
+                }
+            }
+
+            cancelResizeTask(zoneName);
+
+            int currentRadius = zone.getRadius();
+            int difference = newRadius - currentRadius;
+            double changePerStep = (double)difference / stepCount;
+
+            if (stepCount > 1) {
+                int finalNewRadius = newRadius;
+                int finalStepCount = stepCount;
+                BukkitTask task = new BukkitRunnable() {
+                    private int stepsCompleted = 0;
+                    private double current = currentRadius;
+
+                    @Override
+                    public void run() {
+                        if (zoneManager.getZone(zoneName) == null) {
+                            this.cancel();
+                            return;
+                        }
+
+                        if (stepsCompleted >= finalStepCount) {
+                            zone.setRadius(finalNewRadius);
+                            sendMessage(sender, String.format(
+                                    "&aZone &e'%s' &ahas finished resizing to radius &e%d",
+                                    zoneName, finalNewRadius
+                            ));
+                            this.cancel();
+                            return;
+                        }
+
+                        current += changePerStep;
+                        zone.setRadius((int)Math.round(current));
+                        stepsCompleted++;
+
+                        if (stepsCompleted % 5 == 0 || stepsCompleted == finalStepCount) {
+                            sendMessage(sender, String.format(
+                                    "&7Zone &e'%s' &7progress: &a%d%% &8(%d/%d steps)",
+                                    zoneName,
+                                    (stepsCompleted * 100) / finalStepCount,
+                                    stepsCompleted,
+                                    finalStepCount
+                            ));
+                        }
+                    }
+                }.runTaskTimer(this, 0L, 20L);
+
+                activeResizeTasks.put(zoneName, task);
+
+                sendMessage(sender, String.format(
+                        "&aZone &e'%s' &aresizing from &e%d &ato &e%d &ain &e%d &aseconds",
+                        zoneName, currentRadius, newRadius, stepCount
+                ));
+            } else {
+                zone.setRadius(newRadius);
+                sendMessage(sender, String.format(
+                        "&aZone &e'%s' &aresized to radius &e%d",
+                        zoneName, newRadius
+                ));
+            }
+
+            return true;
+        } catch (NumberFormatException e) {
+            sendMessage(sender, "&cInvalid number format for radius or step count!");
+            return true;
+        }
+    }
+
+    private void sendZoneHelp(CommandSender sender) {
+        sendMessage(sender,
+                "&6Zone Commands:\n" +
+                        "&e/zone create <name> <circle|square> <radius> <effect|must_stay|safe|team_only> [effect:amplifier|team] &7- Create a new zone\n" +
+                        "&e/zone delete <name> &7- Delete a zone\n" +
+                        "&e/zone info &7- Show detailed zone info\n" +
+                        "&e/zone toggle <name> &7- Toggles a zone\n" +
+                        "&e/zone resize <name> <radius> [stepCount] &7- Resizes a zone\n" +
+                        "&e/zone movehere <name> &7- Moves zone to your location\n"
+        );
     }
 
     private boolean handleZoneToggle(Player player, String[] args) {
@@ -922,18 +1361,131 @@ public final class EventTools extends JavaPlugin implements Listener {
         }
 
         zone.setActive(!zone.isActive());
-        sendMessage(player, String.format("&aZone '%s' is now %s",
+        sendMessage(player, String.format("&eZone '%s' is now %s",
                 zone.getName(),
                 zone.isActive() ? "&aACTIVE" : "&cINACTIVE"
         ));
         return true;
     }
 
-    private int getEligiblePlayerCount(CommandSender sender) {
-        return (int) Bukkit.getOnlinePlayers().stream()
-                .filter(p -> !p.equals(sender))
+    private boolean handleChangeGamemode(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
+        if (args.length < 2) {
+            sendMessage(sender, "&cUsage: /changegamemode <mode> <player|all|alive|eliminated|@team>");
+            sendMessage(sender, "&7Modes: survival, creative, adventure, spectator");
+            return true;
+        }
+
+        GameMode mode;
+        try {
+            mode = GameMode.valueOf(args[0].toUpperCase());
+        } catch (IllegalArgumentException e) {
+            sendMessage(sender, "&cInvalid gamemode! Use: survival, creative, adventure, spectator");
+            return true;
+        }
+
+        List<Player> targets = getTargetPlayers(sender, args[1])
+                .stream()
+                .filter(p -> !(sender instanceof Player && p.equals((Player) sender)))
                 .filter(p -> !p.hasPermission("eventtools.bypass"))
-                .count();
+                .collect(Collectors.toList());
+
+        if (targets.isEmpty()) {
+            if (args[1].equalsIgnoreCase(sender.getName())) {
+                sendMessage(sender, "&cYou can't change your own gamemode!");
+            }
+            else if (getTargetPlayers(sender, args[1]).stream().anyMatch(p -> p.hasPermission("eventtools.bypass"))) {
+                sendMessage(sender, "&cYou can't change that player's gamemode!");
+            }
+            else {
+                sendMessage(sender, "&cNo matching players found!");
+            }
+            return true;
+        }
+
+        for (Player player : targets) {
+            player.setGameMode(mode);
+            sendMessage(player, "&aYour gamemode was changed to " + mode.name().toLowerCase());
+        }
+
+        String targetName;
+        if (args[1].startsWith("@")) {
+            targetName = "team " + args[1].substring(1);
+        } else {
+            targetName = args[1].matches("all|alive|eliminated") ?
+                    targets.size() + " players" : args[1];
+        }
+
+        sendMessage(sender, String.format("&eChanged gamemode of %s to %s", targetName, mode.name().toLowerCase()));
+        return true;
+    }
+
+    private boolean handleKitCommand(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
+        if (args.length < 2) {
+            sendMessage(sender, "&cUsage: /kit <kitName> <player|all|alive|eliminated|@team>");
+            return true;
+        }
+
+        String kitName = args[0].toLowerCase();
+        ConfigurationSection kitsSection = config.getConfigurationSection("kits");
+
+        if (kitsSection == null || !kitsSection.contains(kitName)) {
+            sendMessage(sender, "&cKit '" + kitName + "' not found!");
+            sendMessage(sender, "&7Available kits: " + String.join(", ", kitsSection.getKeys(false)));
+            return true;
+        }
+
+        List<Player> targets = getTargetPlayers(sender, args[1])
+                .stream()
+                .filter(p -> !(sender instanceof Player && p.equals((Player) sender)))
+                .filter(p -> !p.hasPermission("eventtools.bypass"))
+                .collect(Collectors.toList());
+
+        if (targets.isEmpty()) {
+            if (args[1].equalsIgnoreCase(sender.getName())) {
+                sendMessage(sender, "&cYou can't give a kit to yourself!");
+            }
+            else if (getTargetPlayers(sender, args[1]).stream().anyMatch(p -> p.hasPermission("eventtools.bypass"))) {
+                sendMessage(sender, "&cYou can't give a kit to that player!");
+            }
+            else {
+                sendMessage(sender, "&cNo matching players found!");
+            }
+            return true;
+        }
+
+        for (Player player : targets) {
+            giveKit(player, kitName);
+            sendMessage(player, "&aYou received the " + kitName + " kit!");
+        }
+
+        String targetName;
+        if (args[1].startsWith("@")) {
+            targetName = "team " + args[1].substring(1);
+        } else {
+            targetName = args[1].matches("all|alive|eliminated") ?
+                    targets.size() + " players" : args[1];
+        }
+
+        sendMessage(sender, String.format("&eGave %s kit to %s!", kitName, targetName));
+        return true;
+    }
+
+    private final Map<String, BukkitTask> activeResizeTasks = new HashMap<>();
+
+    public void cancelResizeTask(String zoneName) {
+        BukkitTask task = activeResizeTasks.get(zoneName);
+        if (task != null) {
+            task.cancel();
+            activeResizeTasks.remove(zoneName);
+        }
     }
 
     private int parseInt(String input, int defaultValue) {
@@ -944,8 +1496,12 @@ public final class EventTools extends JavaPlugin implements Listener {
         }
     }
 
+    public boolean isEliminated(UUID playerId) {
+        return eliminatedPlayers.contains(playerId);
+    }
+
     public boolean isEliminated(Player player) {
-        return eliminatedPlayers.contains(player.getUniqueId());
+        return isEliminated(player.getUniqueId());
     }
 
     private void endVote() {
@@ -985,7 +1541,6 @@ public final class EventTools extends JavaPlugin implements Listener {
 
     public void resetEvent() {
         eliminatedPlayers.clear();
-        disconnectedPlayers.clear();
         eliminationOrder.clear();
         votes.clear();
 
@@ -1034,99 +1589,6 @@ public final class EventTools extends JavaPlugin implements Listener {
         }
 
         targetNumber = 0;
-    }
-
-    private boolean handleChangeGamemode(CommandSender sender, String[] args) {
-        if (args.length < 1) {
-            sendMessage(sender, "&cUsage: /changegamemode <mode> [player|all|alive|eliminated]");
-            sendMessage(sender, "&7Modes: survival, creative, adventure, spectator");
-            return true;
-        }
-
-        GameMode mode;
-        try {
-            mode = GameMode.valueOf(args[0].toUpperCase());
-        } catch (IllegalArgumentException e) {
-            sendMessage(sender, "&cInvalid gamemode! Use: survival, creative, adventure, spectator");
-            return true;
-        }
-
-        String target = args.length > 1 ? args[1].toLowerCase() : "self";
-
-        int changed = 0;
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            boolean shouldChange = switch (target) {
-                case "all" -> true;
-                case "alive" -> !isEliminated(player);
-                case "eliminated" -> isEliminated(player);
-                case "self" -> sender instanceof Player && ((Player) sender).getUniqueId().equals(player.getUniqueId());
-                default -> player.getName().equalsIgnoreCase(args[1]);
-            };
-
-            if (shouldChange) {
-                player.setGameMode(mode);
-                sendMessage(player, "&aYour gamemode was changed to " + mode.name().toLowerCase());
-                changed++;
-            }
-        }
-
-        if (changed == 0 && !target.matches("all|alive|eliminated|self")) {
-            sendMessage(sender, "&cPlayer not found!");
-            return true;
-        }
-
-        String targetName = target.matches("all|alive|eliminated") ?
-                target + " players" :
-                target.equals("self") ? "yourself" : args[1];
-        sendMessage(sender, String.format("&aChanged gamemode of %s to %s", targetName, mode.name().toLowerCase()));
-        return true;
-    }
-
-    private boolean handleKitCommand(CommandSender sender, String[] args) {
-        if (args.length < 2) {
-            sendMessage(sender, "&cUsage: /kit <kitName> <player|all|alive|eliminated>");
-            return true;
-        }
-
-        String kitName = args[0].toLowerCase();
-        ConfigurationSection kitsSection = config.getConfigurationSection("kits");
-
-        if (kitsSection == null || !kitsSection.contains(kitName)) {
-            sendMessage(sender, "&cKit '" + kitName + "' not found!");
-            sendMessage(sender, "&7Available kits: " + String.join(", ", kitsSection.getKeys(false)));
-            return true;
-        }
-
-        int given = 0;
-        String target = args[1].toLowerCase();
-
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            if (player.equals(sender)) continue;
-
-            boolean shouldGive = switch (target) {
-                case "all" -> true;
-                case "alive" -> !isEliminated(player);
-                case "eliminated" -> isEliminated(player);
-                default -> player.getName().equalsIgnoreCase(args[1]);
-            };
-
-            if (shouldGive) {
-                giveKit(player, kitName);
-                sendMessage(player, "&aYou received the " + kitName + " kit!");
-                given++;
-            }
-        }
-
-        if (given == 0 && !target.matches("all|alive|eliminated")) {
-            sendMessage(sender, "&cPlayer not found!");
-            return true;
-        }
-
-        String targetName = target.matches("all|alive|eliminated") ?
-                given + " player" + (given != 1 ? "s" : "") :
-                Bukkit.getPlayer(args[1]) != null ? Bukkit.getPlayer(args[1]).getName() : "target";
-        sendMessage(sender, String.format("&aGave %s kit to %s!", kitName, targetName));
-        return true;
     }
 
     private void giveKit(Player player, String kitName) {
@@ -1200,6 +1662,8 @@ public final class EventTools extends JavaPlugin implements Listener {
                 return handleTeamColor(sender, args);
             case "info":
                 return handleTeamInfo(sender);
+            case "settings":
+                return handleTeamSettings(sender, args);
             default:
                 sendTeamHelp(sender);
                 return true;
@@ -1207,33 +1671,54 @@ public final class EventTools extends JavaPlugin implements Listener {
     }
 
     private boolean handleTeamCreate(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (args.length < 3) {
             sendMessage(sender, "&cUsage: /team create <name> <color>");
-            sendMessage(sender, "&7Available colors: " + Arrays.toString(ChatColor.values()));
+            sendMessage(sender, "&7Available colors: " + getColorList());
             return true;
         }
 
         try {
             ChatColor color = ChatColor.valueOf(args[2].toUpperCase());
+
+            if (!isColorCode(color)) {
+                sendMessage(sender, "&c" + args[2] + " is not a valid color! Use: " + getColorList());
+                return true;
+            }
+
             if (teamManager.createTeam(args[1], color)) {
-                sendMessage(sender, "&aCreated team " + color + args[1]);
+                sendMessage(sender, "&eCreated team " + color + args[1]);
             } else {
-                sendMessage(sender, "&cMax teams reached (4) or team already exists");
+                sendMessage(sender, "&cMax teams reached (16) or team already exists!");
             }
         } catch (IllegalArgumentException e) {
-            sendMessage(sender, "&cInvalid color! Use: " + Arrays.toString(ChatColor.values()));
+            sendMessage(sender, "&cInvalid color! Use: " + getColorList());
         }
         return true;
     }
 
     private boolean handleTeamDelete(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (args.length < 2) {
             sendMessage(sender, "&cUsage: /team delete <name>");
             return true;
         }
 
         if (teamManager.deleteTeam(args[1])) {
-            sendMessage(sender, "&aDeleted team " + args[1]);
+            sendMessage(sender, "&eDeleted team " + args[1]);
+
+            if (teamManager.getTeamNames().size() == 1) {
+                String lastTeamName = teamManager.getTeamNames().get(0);
+                if (teamManager.deleteTeam(lastTeamName)) {
+                    sendMessage(sender, "&aAutomatically deleted last remaining team: &e" + lastTeamName);
+                }
+            }
         } else {
             sendMessage(sender, "&cTeam not found!");
         }
@@ -1241,6 +1726,10 @@ public final class EventTools extends JavaPlugin implements Listener {
     }
 
     private boolean handleTeamAssign(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (args.length < 3) {
             sendMessage(sender, "&cUsage: /team assign <player> <team>");
             return true;
@@ -1253,12 +1742,12 @@ public final class EventTools extends JavaPlugin implements Listener {
         }
 
         if (target.hasPermission("eventtools.bypass")) {
-            sendMessage(sender, "&cYou can't assign staff to teams!");
+            sendMessage(sender, "&cYou can't assign that player to teams!");
             return true;
         }
 
         if (teamManager.addToTeam(target, args[2])) {
-            sendMessage(sender, "&aAssigned " + target.getName() + " to " + args[2]);
+            sendMessage(sender, "&eAssigned " + target.getName() + " to " + args[2]);
             sendMessage(target, "&aYou've been assigned to team " + args[2]);
         } else {
             sendMessage(sender, "&cTeam not found!");
@@ -1284,12 +1773,7 @@ public final class EventTools extends JavaPlugin implements Listener {
 
         Player player = (Player) sender;
         if (player.hasPermission("eventtools.bypass")) {
-            sendMessage(sender, "&cStaff cannot join teams!");
-            return true;
-        }
-
-        if (teamManager.getPlayerTeam(player).isPresent()) {
-            sendMessage(sender, "&cYou are already in a team! Leave it first with /team leave");
+            sendMessage(sender, "&You cannot join teams!");
             return true;
         }
 
@@ -1299,8 +1783,16 @@ public final class EventTools extends JavaPlugin implements Listener {
             return true;
         }
 
+        Optional<Team> currentTeam = teamManager.getPlayerTeam(player);
+        if (currentTeam.isPresent()) {
+            Team oldTeam = currentTeam.get();
+            oldTeam.removeMember(player);
+            sendMessage(sender, "&aYou left team " + oldTeam.getColor() + oldTeam.getName());
+        }
+
         if (teamManager.addToTeam(player, args[1])) {
-            sendMessage(sender, "&aYou have joined team " + team.getColor() + team.getName());
+            sendMessage(sender, "&aYou joined team " + team.getColor() + team.getName());
+            playSound(player, Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1, 1.5f);
             return true;
         }
 
@@ -1321,7 +1813,7 @@ public final class EventTools extends JavaPlugin implements Listener {
 
         Player player = (Player) sender;
         if (player.hasPermission("eventtools.bypass")) {
-            sendMessage(sender, "&cStaff cannot leave teams!");
+            sendMessage(sender, "&cYou cannot leave teams!");
             return true;
         }
 
@@ -1333,11 +1825,16 @@ public final class EventTools extends JavaPlugin implements Listener {
 
         Team team = currentTeam.get();
         team.removeMember(player);
+        playSound(player, Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1, 1.5f);
         sendMessage(sender, "&aYou have left team " + team.getColor() + team.getName());
         return true;
     }
 
     private boolean handleTeamColor(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
         if (args.length < 3) {
             sendMessage(sender, "&cUsage: /team color <team> <newColor>");
             return true;
@@ -1352,35 +1849,96 @@ public final class EventTools extends JavaPlugin implements Listener {
         try {
             ChatColor color = ChatColor.valueOf(args[2].toUpperCase());
             team.setColor(color);
-            sendMessage(sender, "&aTeam color updated!");
+            sendMessage(sender, "&eTeam color updated!");
         } catch (IllegalArgumentException e) {
             sendMessage(sender, "&cInvalid color! Use: " + Arrays.toString(ChatColor.values()));
         }
         return true;
     }
 
-    private boolean handleTeamInfo(CommandSender sender) {
-        if (!teamManager.hasActiveTeams()) {
-            sendMessage(sender, "&7No active teams. Use /team create");
+    private boolean handleTeamSettings(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
+        if (args.length < 4) {
+            sendMessage(sender, "&cUsage: /team settings <team|all> <property> <true|false>");
+            return true;
+        }
+        if (!Arrays.asList("friendlyfire", "nametags", "collision").contains(args[2].toLowerCase())) {
+            sendMessage(sender, "&cInvalid property! Use: friendlyfire, nametags, collision");
             return true;
         }
 
-        StringBuilder message = new StringBuilder("&6Active Teams:\n");
-        teamManager.getActiveTeams().forEach(team -> {
+        String teamName = args[1];
+        String property = args[2].toLowerCase();
+        boolean value = args[3].equalsIgnoreCase("true");
+
+        if (teamName.equalsIgnoreCase("all")) {
+            teamManager.getAllTeams().forEach(team -> {
+                switch (property) {
+                    case "friendlyfire": team.setFriendlyFire(value); break;
+                    case "nametags": team.setNameTagVisibility(value); break;
+                    case "collision": team.setCollisionEnabled(value); break;
+                }
+            });
+            sendMessage(sender, "&eUpdated all teams: " + property + ": " + (value ? "&atrue" : "&cfalse"));
+        } else {
+            Team team = teamManager.getTeam(teamName);
+            ChatColor teamColor = team.getColor();
+            if (team == null) {
+                sendMessage(sender, "&cTeam not found!");
+                return true;
+            }
+            switch (property) {
+                case "friendlyfire": team.setFriendlyFire(value); break;
+                case "nametags": team.setNameTagVisibility(value); break;
+                case "collision": team.setCollisionEnabled(value); break;
+            }
+            sendMessage(sender, "&eUpdated team " + teamColor + teamName + "&e's' " + property + ": " + (value ? "&atrue" : "&cfalse"));
+        }
+        return true;
+    }
+
+    private boolean handleTeamInfo(CommandSender sender) {
+        if (!sender.hasPermission("eventtools.admin")) {
+            sendMessage(sender, "&cYou don't have the required permission to run this command!");
+            return true;
+        }
+        if (teamManager.getAllTeams().isEmpty()) {
+            sendMessage(sender, "&7No teams available. Use &e/team create &7to create some!");
+            return true;
+        }
+
+        StringBuilder message = new StringBuilder("&6Teams:\n");
+        teamManager.getAllTeams().forEach(team -> {
             message.append(team.getColor())
                     .append(team.getName())
                     .append(" &7(")
                     .append(team.size())
-                    .append(" players): ");
+                    .append(" Member").append(team.size() != 1 ? "s" : "").append(")");
 
-            message.append(team.getMembers().stream()
-                    .map(uuid -> {
-                        Player p = Bukkit.getPlayer(uuid);
-                        String status = (p != null && isEliminated(p)) ? "&m" : "";
-                        return status + (p != null ? p.getName() : "?");
-                    })
-                    .collect(Collectors.joining("&7, ")));
+            message.append("\n&8> &7Settings: ");
+            message.append("Friendly Fire: ").append(team.friendlyFire ? "&atrue" : "&cfalse");
+            message.append("&7, Collision: ").append(team.collisionEnabled ? "&atrue" : "&cfalse");
+            message.append("&7, Nametags: ").append(team.nameTagVisibility ? "&atrue" : "&cfalse");
 
+            message.append("\n&8> &7Members: ");
+            if (team.getMembers().isEmpty()) {
+                message.append("&7None");
+            } else {
+                message.append(team.getMembers().stream()
+                        .map(uuid -> {
+                            OfflinePlayer player = Bukkit.getOfflinePlayer(uuid);
+                            String name = player.getName() != null ? player.getName() : "Unknown";
+                            boolean isOnline = player.isOnline();
+                            boolean isEliminated = isEliminated(uuid);
+
+                            return (isOnline ? "&7" : "&8") +
+                                    (isEliminated ? "&m" + name + "&r" : name);
+                        })
+                        .collect(Collectors.joining("&7,&r ")));
+            }
             message.append("\n");
         });
 
@@ -1389,15 +1947,31 @@ public final class EventTools extends JavaPlugin implements Listener {
     }
 
     private void sendTeamHelp(CommandSender sender) {
-        sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                "&6Team Commands:\n" +
-                        "&e/team create <name> <color> &7- Create new team\n" +
-                        "&e/team delete <name> &7- Remove a team\n" +
-                        "&e/team assign <player> <team> &7- Assign a player to a team\n" +
-                        "&e/team color <name> <color> &7- Change team color\n" +
-                        "&e/team info &7- Show detailed team info\n" +
-                        "&7Available colors: &f" + Arrays.toString(ChatColor.values())
-        ));
+        if (!sender.hasPermission("eventtools.admin")) {
+
+            sendMessage(sender, "&6Team Commands:\n" +
+                    "&e/team join <team> &7- Join a team\n" +
+                    "&e/team leave &7- Leave a team\n");
+            return;
+        }
+        sendMessage(sender, "&6Team Commands:\n" +
+                "&e/team create <name> <color> &7- Create a new team\n" +
+                "&e/team delete <name> &7- Delete a team\n" +
+                "&e/team assign <player> <team> &7- Assign a player to a team\n" +
+                "&e/team color <name> <color> &7- Change team color\n" +
+                "&e/team info &7- Show detailed team info\n" +
+                "&e/team settings &7- Modify settings of teams\n");
+    }
+
+    private boolean isColorCode(ChatColor color) {
+        return color.isColor() && !color.isFormat();
+    }
+
+    private String getColorList() {
+        return Arrays.stream(ChatColor.values())
+                .filter(this::isColorCode)
+                .map(color -> color + color.name().toLowerCase())
+                .collect(Collectors.joining("&7, "));
     }
 
     public boolean eliminatePlayer(Player player) {
@@ -1415,7 +1989,7 @@ public final class EventTools extends JavaPlugin implements Listener {
         }
 
         player.getWorld().spawnParticle(Particle.EXPLOSION_LARGE, player.getLocation(), 1);
-        player.getWorld().playSound(player.getLocation(), Sound.ENTITY_LIGHTNING_BOLT_THUNDER, 1.0f, 0.8f);
+        broadcastSound(Sound.ENTITY_LIGHTNING_BOLT_THUNDER, 0.5f, 1.1f);
         eliminatedPlayers.add(player.getUniqueId());
         eliminationOrder.add(player.getUniqueId());
         player.setGameMode(eliminationMode);
@@ -1428,7 +2002,12 @@ public final class EventTools extends JavaPlugin implements Listener {
         Optional<Team> team = teamManager.getPlayerTeam(player);
 
         if (team.isPresent()) {
-            broadcastMessage(team.get().getColor() + team.get().getName() +
+            Team playerTeam = team.get();
+            if (!teamManager.isTeamActive(playerTeam)) {
+                teamManager.markTeamEliminated(playerTeam);
+                broadcastMessage(playerTeam.getColor() + playerTeam.getName() + " &chas been fully eliminated!");
+            }
+            broadcastMessage(playerTeam.getColor() + playerTeam.getName() +
                     " &7> &c" + player.getName() + " has been eliminated!");
         } else {
             broadcastMessage("&c" + player.getName() + " has been eliminated!");
@@ -1438,78 +2017,79 @@ public final class EventTools extends JavaPlugin implements Listener {
     }
 
     private void checkForEventEnd() {
-        if (teamManager.getTeamNames().isEmpty()) {
-            List<Player> remainingPlayers = Bukkit.getOnlinePlayers().stream()
-                    .filter(p -> !p.hasPermission("eventtools.bypass"))
-                    .filter(p -> !isEliminated(p))
-                    .collect(Collectors.toList());
+        switch (eventType) {
+            case TEAM_BATTLE:
+                teamManager.checkForTeamVictory();
+                break;
 
-            if (remainingPlayers.size() <= 1) {
-                new BukkitRunnable() {
-                    @Override
-                    public void run() {
-                        List<Player> finalPlayers = Bukkit.getOnlinePlayers().stream()
-                                .filter(p -> !p.hasPermission("eventtools.bypass"))
-                                .filter(p -> !isEliminated(p))
-                                .collect(Collectors.toList());
+            case HYBRID_FFA:
+            case PURE_FFA:
+                List<Player> alivePlayers = Bukkit.getOnlinePlayers().stream()
+                        .filter(p -> !isEliminated(p))
+                        .filter(p -> !p.hasPermission("eventtools.bypass"))
+                        .collect(Collectors.toList());
 
-                        if (finalPlayers.size() == 1) {
-                            Player winner = finalPlayers.get(0);
-                            broadcastWinnerEffects(winner);
-                        } else if (finalPlayers.isEmpty()) {
-                            broadcastMessage("&cAll players were eliminated!");
-                        }
-
-                        announceFinalPlacements();
-                        resetEvent();
-                    }
-                }.runTask(this);
-            }
-        } else {
-            teamManager.checkForTeamVictory();
+                if (alivePlayers.size() <= 1) {
+                    Player winner = alivePlayers.get(0);
+                    celebrateVictory(winner, "&6&lWINNER", "&7" + winner.getName());
+                    announceFinalPlacements();
+                    resetEvent();
+                }
+                break;
         }
     }
 
-    private void broadcastWinnerEffects(Player winner) {
-        broadcastTitle("&6&lWINNER", "&7" + winner.getName());
-        Bukkit.getOnlinePlayers().forEach(p ->
-                p.playSound(winner.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 0.5f)
-        );
+    private void celebrateVictory(Player winner, String victoryTitle, String victorySubtitle) {
+        broadcastTitle(victoryTitle, victorySubtitle);
+        broadcastSound(Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1, 0.5f);
+        broadcastSound(Sound.ENTITY_FIREWORK_ROCKET_LAUNCH, 1, 1);
+
+        Location loc = winner.getLocation();
 
         new BukkitRunnable() {
-            int fireworksLeft = 15;
+            int count = 0;
             Random random = new Random();
 
             @Override
             public void run() {
-                if (fireworksLeft <= 0) {
+                if (count++ >= 15) {
                     cancel();
                     return;
                 }
 
-                Firework fw = winner.getWorld().spawn(winner.getLocation(), Firework.class);
-                FireworkMeta meta = fw.getFireworkMeta();
+                try {
+                    Location fireLoc = loc.clone().add(
+                            (random.nextDouble() * 6) - 3,
+                            random.nextDouble() * 2,
+                            (random.nextDouble() * 6) - 3
+                    );
 
-                FireworkEffect.Type type = FireworkEffect.Type.values()[random.nextInt(FireworkEffect.Type.values().length)];
-                Color color = Color.fromRGB(random.nextInt(256), random.nextInt(256), random.nextInt(256));
-                Color fade = Color.fromRGB(random.nextInt(256), random.nextInt(256), random.nextInt(256));
+                    Firework fw = fireLoc.getWorld().spawn(fireLoc, Firework.class);
+                    FireworkMeta meta = fw.getFireworkMeta();
 
-                meta.addEffect(FireworkEffect.builder()
-                        .with(type)
-                        .withColor(color)
-                        .withFade(fade)
-                        .trail(random.nextBoolean())
-                        .flicker(random.nextBoolean())
-                        .build());
+                    Color randomColor = Color.fromRGB(
+                            random.nextInt(256),
+                            random.nextInt(256),
+                            random.nextInt(256)
+                    );
 
-                meta.setPower(1 + random.nextInt(2));
-                fw.setFireworkMeta(meta);
+                    meta.addEffect(FireworkEffect.builder()
+                            .with(FireworkEffect.Type.BALL)
+                            .withColor(randomColor)
+                            .withFade(Color.WHITE)
+                            .trail(true)
+                            .flicker(true)
+                            .build());
 
-                Bukkit.getOnlinePlayers().forEach(p ->
-                        p.playSound(winner.getLocation(), Sound.ENTITY_FIREWORK_ROCKET_LAUNCH, 1.0f, 1.0f)
-                );
+                    meta.setPower(1);
+                    fw.setFireworkMeta(meta);
 
-                fireworksLeft--;
+                    broadcastSound(Sound.ENTITY_FIREWORK_ROCKET_LAUNCH, 0.5f, 1);
+
+                } catch (Exception e) {
+                    getLogger().warning("FFA Firework error: " + e.getMessage());
+                    cancel();
+                }
             }
         }.runTaskTimer(this, 0L, 10L);
     }
@@ -1522,7 +2102,15 @@ public final class EventTools extends JavaPlugin implements Listener {
         eliminationOrder.remove(player.getUniqueId());
         player.setGameMode(GameMode.SURVIVAL);
 
-        teamManager.handleRevival(player);
+        Optional<Team> team = teamManager.getPlayerTeam(player);
+        if (team.isPresent()) {
+            Team playerTeam = team.get();
+            if (teamManager.isTeamEliminated(playerTeam)) {
+                teamManager.reviveTeam(playerTeam);
+                broadcastMessage(playerTeam.getColor() + playerTeam.getName() +
+                        " &ahas been revived!");
+            }
+        }
 
         if (sender instanceof Player senderPlayer) {
             safeTeleport(player, senderPlayer.getLocation());
@@ -1549,22 +2137,26 @@ public final class EventTools extends JavaPlugin implements Listener {
     }
 
     private void announceFinalPlacements() {
-        List<Player> placements = new ArrayList<>();
+        List<UUID> placements = new ArrayList<>();
 
-        Player winner = Bukkit.getOnlinePlayers().stream()
+        Player onlineWinner = Bukkit.getOnlinePlayers().stream()
                 .filter(p -> !p.hasPermission("eventtools.bypass"))
                 .filter(p -> !isEliminated(p))
                 .findFirst()
                 .orElse(null);
-        if (winner != null) placements.add(winner);
+
+        if (onlineWinner != null) {
+            placements.add(onlineWinner.getUniqueId());
+        } else if (!eliminationOrder.isEmpty()) {
+            placements.add(eliminationOrder.get(eliminationOrder.size() - 1));
+        }
 
         synchronized (eliminationOrder) {
             for (int i = eliminationOrder.size() - 1; i >= 0; i--) {
                 UUID playerId = eliminationOrder.get(i);
-                Player p = Bukkit.getPlayer(playerId);
-                if (p != null && isEliminated(p) && !placements.contains(p)) {
-                    placements.add(p);
-                    if (placements.size() >= 4) break;
+                if (!placements.contains(playerId)) {
+                    placements.add(playerId);
+                    if (placements.size() >= 5) break;
                 }
             }
         }
@@ -1575,7 +2167,13 @@ public final class EventTools extends JavaPlugin implements Listener {
         String[] icons = {"🥇 ", "🥈 ", "🥉 ", "", ""};
 
         for (int i = 0; i < Math.min(5, placements.size()); i++) {
-            String placement = colors[i] + icons[i] + suffixes[i] + ": &r" + placements.get(i).getName();
+            UUID playerId = placements.get(i);
+            OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(playerId);
+            String name = offlinePlayer.getName() != null ? offlinePlayer.getName() : "Unknown";
+            boolean isOnline = offlinePlayer.isOnline();
+
+            String status = isOnline ? "&7" : "&8";
+            String placement = colors[i] + icons[i] + suffixes[i] + ": &r" + status + name;
             broadcastMessage(placement);
         }
     }
@@ -1590,12 +2188,22 @@ public final class EventTools extends JavaPlugin implements Listener {
         );
     }
 
-    private void sendMessage(CommandSender sender, String message) {
+    public void sendMessage(CommandSender sender, String message) {
         sender.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
     }
 
     public void broadcastMessage(String message) {
         Bukkit.broadcastMessage(ChatColor.translateAlternateColorCodes('&', message));
+    }
+
+    public void playSound(Player player, Sound sound, float volume, float pitch) {
+        player.playSound(player.getLocation(), sound, volume, pitch);
+    }
+
+    public void broadcastSound(Sound sound, float volume, float pitch) {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            playSound(player, sound, volume, pitch);
+        }
     }
 
     private ItemStack getItemFromConfig(ConfigurationSection section, String path) {
@@ -1628,19 +2236,9 @@ public final class EventTools extends JavaPlugin implements Listener {
         Player player = event.getPlayer();
         if (player.hasPermission("eventtools.bypass")) return;
 
-        if (eventActive && !disconnectedPlayers.remove(player.getUniqueId())) {
-            eliminatePlayer(player);
+        if (eventActive) {
+            handleElimination(player);
             sendMessage(player, "&cYou joined mid-event and were automatically eliminated!");
-        }
-    }
-
-    @EventHandler
-    public void onPlayerQuit(PlayerQuitEvent event) {
-        Player player = event.getPlayer();
-        if (player.hasPermission("eventtools.bypass")) return;
-
-        if (eventActive && isEliminated(player)) {
-            disconnectedPlayers.add(player.getUniqueId());
         }
     }
 
@@ -1652,6 +2250,40 @@ public final class EventTools extends JavaPlugin implements Listener {
         if (player.hasPermission("eventtools.bypass")) return;
 
         handleElimination(player);
+    }
+
+    @EventHandler
+    public void onCommandPreprocess(PlayerCommandPreprocessEvent event) {
+        Player player = event.getPlayer();
+        if (!chatMuted || player.hasPermission("eventtools.bypass")) {
+            return;
+        }
+
+        String command = event.getMessage().split(" ")[0].toLowerCase();
+
+        List<String> blockedCommands = Arrays.asList(
+                "/me", "/minecraft:me",
+                "/say", "/minecraft:say",
+                "/msg", "/minecraft:msg",
+                "/tell", "/minecraft:tell",
+                "/whisper", "/minecraft:whisper",
+                "/w", "/minecraft:w",
+                "/pm", "/minecraft:pm",
+                "/t", "/minecraft:t",
+                "/emote", "/minecraft:emote",
+                "/action", "/minecraft:action"
+        );
+
+        if (blockedCommands.contains(command)) {
+            event.setCancelled(true);
+            sendMessage(player, "&cThis command is blocked while the chat is muted!");
+            return;
+        }
+
+        if (event.getMessage().matches("/(msg|tell|w|me)(?i).*")) {
+            event.setCancelled(true);
+            sendMessage(player, "&cThis command is blocked while the chat is muted!");
+        }
     }
 
     @EventHandler
@@ -1681,12 +2313,14 @@ public final class EventTools extends JavaPlugin implements Listener {
             String message = event.getMessage().toLowerCase();
             if (message.equals("yes") || message.equals("y") || message.equals("agree")) {
                 votes.put(player.getUniqueId(), true);
-                sendMessage(player, "&aYour YES vote has been counted!");
+                sendMessage(player, "&7Your &aYES &7vote has been counted!");
+                playSound(player, Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1, 1.5f);
                 event.setCancelled(true);
             }
             else if (message.equals("no") || message.equals("n") || message.equals("disagree")) {
                 votes.put(player.getUniqueId(), false);
-                sendMessage(player, "&cYour NO vote has been counted!");
+                sendMessage(player, "&7Your &aNO &7vote has been counted!");
+                playSound(player, Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1, 1.5f);
                 event.setCancelled(true);
             }
         }
@@ -1695,150 +2329,222 @@ public final class EventTools extends JavaPlugin implements Listener {
     @Override
     public List<String> onTabComplete(CommandSender sender, Command cmd, String alias, String[] args) {
         List<String> completions = new ArrayList<>();
-        if (!sender.hasPermission("eventtools.admin")) return completions;
-
+        boolean isAdmin = sender.hasPermission("eventtools.admin");
         String currentArg = args.length > 0 ? args[args.length - 1].toLowerCase() : "";
 
+        if (!isAdmin && !cmd.getName().equalsIgnoreCase("team")) {
+            return completions;
+        }
+
         switch (cmd.getName().toLowerCase()) {
-            case "bring":
-            case "heal":
-            case "clearinventory":
-            case "freeze":
-            case "eliminate":
-            case "revive":
-            case "invsee":
-                if (args.length == 1) addTargetCompletions(completions);
-                break;
-
-            case "giveitem":
-                if (args.length == 1) {
-                    addTargetCompletions(completions);
-                } else if (args.length == 2) {
-                    completions.add("<amount>");
-                }
-                break;
-
-            case "timedeffect":
-                if (args.length == 1) {
-                    Arrays.stream(PotionEffectType.values())
-                            .map(e -> e.getName().toLowerCase())
-                            .forEach(completions::add);
-                } else if (args.length == 2) {
-                    completions.add("<duration>");
-                } else if (args.length == 3) {
-                    completions.add("<amplifier>");
-                    addTargetCompletions(completions);
-                } else if (args.length == 4) {
-                    addTargetCompletions(completions);
-                }
-                break;
-
-            case "kit":
-                if (args.length == 1) {
-                    if (config.getConfigurationSection("kits") != null) {
-                        completions.addAll(config.getConfigurationSection("kits").getKeys(false));
-                    }
-                } else if (args.length == 2) {
-                    addTargetCompletions(completions);
-                }
-                break;
-
-            case "changegamemode":
-                if (args.length == 1) {
-                    completions.addAll(Arrays.asList("survival", "creative", "adventure", "spectator"));
-                } else if (args.length == 2) {
-                    completions.addAll(Arrays.asList("all", "alive", "eliminated"));
-                    completions.addAll(getOnlinePlayerNames());
-                }
-                break;
-
-            case "startevent":
-                if (args.length == 1) {
-                    if (eventTitle != null && !eventTitle.equals("Event")) {
-                        completions.add(eventTitle);
-                    }
-                    completions.add("<title>");
-                }
-                break;
-
-
-            case "startvote":
-                if (args.length >= 1) completions.add("<question>");
-                break;
-            case "numberguess":
-                if (args.length == 1) completions.add("<maxNumber>");
-                break;
-            case "countdown":
-                if (args.length == 1) completions.add("<seconds>");
-                break;
-            case "list":
-                if (args.length == 1) completions.addAll(Arrays.asList("alive", "eliminated", "all"));
-                break;
-
-            case "zone":
-                if (args.length == 1) {
-                    return filterCompletions(Arrays.asList("create", "delete", "list", "toggle"), args[0]);
-                } else if (args.length == 2 && args[0].equalsIgnoreCase("create")) {
-                    return filterCompletions(Collections.singletonList("<name>"), args[1]);
-                } else if (args.length == 3 && args[0].equalsIgnoreCase("create")) {
-                    return filterCompletions(Arrays.asList("circle", "square"), args[2]);
-                } else if (args.length == 4 && args[0].equalsIgnoreCase("create")) {
-                    return filterCompletions(Collections.singletonList("<radius>"), args[3]);
-                } else if (args.length == 5 && args[0].equalsIgnoreCase("create")) {
-                    return filterCompletions(Arrays.asList("effect", "must_stay", "safe"), args[4]);
-                } else if (args.length == 6 && args[0].equalsIgnoreCase("create") && args[4].equalsIgnoreCase("effect")) {
-                    return filterCompletions(
-                            Arrays.stream(PotionEffectType.values())
-                                    .map(e -> e.getName().toLowerCase())
-                                    .collect(Collectors.toList()),
-                            args[5]
-                    );
-                } else if (args.length == 2 && (args[0].equalsIgnoreCase("delete") || args[0].equalsIgnoreCase("toggle"))) {
-                    return filterCompletions(zoneManager.getZoneNames(), args[1]);
-                }
-                break;
-
             case "team":
                 if (args.length == 1) {
-                    return filterCompletions(Arrays.asList(
-                            "create", "delete", "join", "leave", "assign", "color", "info"
-                    ), args[0]);
-                } else if (args.length == 2) {
-                    switch (args[0].toLowerCase()) {
-                        case "create":
-                            return filterCompletions(Collections.singletonList("<name>"), args[1]);
-                        case "delete":
-                        case "color", "join":
-                            return filterCompletions(teamManager.getTeamNames(), args[1]);
-                        case "assign":
-                            return filterCompletions(getOnlinePlayerNames(), args[1]);
+                    List<String> commands = new ArrayList<>();
+                    commands.add("join");
+                    commands.add("leave");
+
+                    if (isAdmin) {
+                        commands.addAll(Arrays.asList("create", "delete", "assign", "color", "info", "settings"));
                     }
-                } else if (args.length == 3) {
+
+                    return filterCompletions(commands, args[0]);
+                }
+                else if (args.length == 2) {
+                    switch (args[0].toLowerCase()) {
+                        case "join":
+                            return filterCompletions(teamManager.getTeamNames(), args[1]);
+                        case "leave":
+                            if (sender instanceof Player) {
+                                return filterCompletions(
+                                        teamManager.getPlayerTeam((Player)sender)
+                                                .map(team -> Collections.singletonList(team.getName()))
+                                                .orElse(Collections.emptyList()),
+                                        args[1]
+                                );
+                            }
+                            break;
+                        case "create":
+                            if (isAdmin) return filterCompletions(Collections.singletonList("<name>"), args[1]);
+                            break;
+                        case "delete":
+                        case "color":
+                            if (isAdmin) return filterCompletions(teamManager.getTeamNames(), args[1]);
+                            break;
+                        case "assign":
+                            if (isAdmin) return filterCompletions(getOnlinePlayerNames(), args[1]);
+                            break;
+                        case "settings":
+                            if (isAdmin) {
+                                List<String> options = new ArrayList<>(teamManager.getTeamNames());
+                                options.add("all");
+                                return filterCompletions(options, args[1]);
+                            }
+                            break;
+                    }
+                }
+                else if (args.length == 3 && isAdmin) {
                     switch (args[0].toLowerCase()) {
                         case "create":
-                            return filterCompletions(
-                                    Arrays.stream(ChatColor.values())
-                                            .filter(c -> c != ChatColor.RESET)
-                                            .map(Enum::name)
-                                            .collect(Collectors.toList()),
-                                    args[2]);
-                        case "assign":
-                            return filterCompletions(teamManager.getTeamNames(), args[2]);
                         case "color":
                             return filterCompletions(
                                     Arrays.stream(ChatColor.values())
-                                            .map(Enum::name)
+                                            .filter(ChatColor::isColor)
+                                            .map(color -> color.name().toLowerCase())
                                             .collect(Collectors.toList()),
-                                    args[2]);
+                                    args[2]
+                            );
+                        case "assign":
+                            return filterCompletions(teamManager.getTeamNames(), args[2]);
+                        case "settings":
+                            return filterCompletions(Arrays.asList("friendlyfire", "nametags", "collision"), args[2]);
                     }
+                }
+                else if (args.length == 4 && isAdmin && args[0].equalsIgnoreCase("settings")) {
+                    return filterCompletions(Arrays.asList("true", "false"), args[3]);
                 }
                 break;
 
-            case "seteventspawn":
-            case "stopevent":
-            case "mutechat":
-            case "clearchat":
-            case "endvote":
+            default:
+                if (isAdmin) {
+                    switch (cmd.getName().toLowerCase()) {
+                        case "bring":
+                        case "heal":
+                        case "clearinventory":
+                        case "freeze":
+                        case "eliminate":
+                        case "revive":
+                        case "invsee":
+                            if (args.length == 1) addTargetCompletions(completions);
+                            break;
+
+                        case "giveitem":
+                            if (args.length == 1) {
+                                addTargetCompletions(completions);
+                            } else if (args.length == 2) {
+                                completions.add("<amount>");
+                            }
+                            break;
+
+                        case "timedeffect":
+                            if (args.length == 1) {
+                                Arrays.stream(PotionEffectType.values())
+                                        .map(e -> e.getName().toLowerCase())
+                                        .forEach(completions::add);
+                            } else if (args.length == 2) {
+                                completions.add("<duration>");
+                            } else if (args.length == 3) {
+                                completions.add("<amplifier>");
+                                addTargetCompletions(completions);
+                            } else if (args.length == 4) {
+                                addTargetCompletions(completions);
+                            }
+                            break;
+
+                        case "kit":
+                            if (args.length == 1) {
+                                if (config.getConfigurationSection("kits") != null) {
+                                    completions.addAll(config.getConfigurationSection("kits").getKeys(false));
+                                }
+                            } else if (args.length == 2) {
+                                addTargetCompletions(completions);
+                            }
+                            break;
+
+                        case "changegamemode":
+                            if (args.length == 1) {
+                                completions.addAll(Arrays.asList("survival", "creative", "adventure", "spectator"));
+                            } else if (args.length == 2) {
+                                completions.addAll(Arrays.asList("all", "alive", "eliminated"));
+                                completions.addAll(getOnlinePlayerNames());
+                            }
+                            break;
+
+                        case "startevent":
+                            if (args.length == 1) {
+                                if (eventTitle != null && !eventTitle.equals("Event")) {
+                                    completions.add(eventTitle);
+                                }
+                                completions.add("<title>");
+                            }
+                            break;
+
+                        case "startvote":
+                            if (args.length >= 1) completions.add("<question>");
+                            break;
+                        case "numberguess":
+                            if (args.length == 1) completions.add("<maxNumber>");
+                            break;
+                        case "countdown":
+                            if (args.length == 1) completions.add("<seconds>");
+                            break;
+                        case "list":
+                            if (args.length == 1) completions.addAll(Arrays.asList("alive", "eliminated", "all"));
+                            break;
+
+                        case "zone":
+                            if (args.length == 1) {
+                                List<String> zoneCommands = new ArrayList<>(Arrays.asList(
+                                        "create", "delete", "info", "toggle",
+                                        "movehere", "resize"
+                                ));
+                                return filterCompletions(zoneCommands, args[0]);
+                            }
+                            else if (args.length == 2) {
+                                switch (args[0].toLowerCase()) {
+                                    case "create":
+                                        return filterCompletions(Collections.singletonList("<name>"), args[1]);
+                                    case "delete":
+                                    case "toggle":
+                                    case "movehere":
+                                    case "resize":
+                                        return filterCompletions(zoneManager.getZoneNames(), args[1]);
+                                }
+                            }
+                            else if (args.length == 3 && args[0].equalsIgnoreCase("create")) {
+                                return filterCompletions(Arrays.asList("circle", "square"), args[2]);
+                            }
+                            else if (args.length == 4 && args[0].equalsIgnoreCase("create")) {
+                                if (args[2].equalsIgnoreCase("circle") || args[2].equalsIgnoreCase("square")) {
+                                    return filterCompletions(Collections.singletonList("<radius>"), args[3]);
+                                }
+                            }
+                            else if (args.length == 5 && args[0].equalsIgnoreCase("create")) {
+                                return filterCompletions(Arrays.asList(
+                                        "effect", "must_stay", "safe",
+                                        "team_only", "damage"
+                                ), args[4]);
+                            }
+                            else if (args.length == 6 && args[0].equalsIgnoreCase("create")) {
+                                switch (args[4].toLowerCase()) {
+                                    case "effect":
+                                        return filterCompletions(
+                                                Arrays.stream(PotionEffectType.values())
+                                                        .map(e -> e.getName().toLowerCase())
+                                                        .collect(Collectors.toList()),
+                                                args[5]
+                                        );
+                                    case "team_only":
+                                        return filterCompletions(teamManager.getTeamNames(), args[5]);
+                                    case "damage":
+                                        return filterCompletions(Arrays.asList("1", "2", "3", "4", "5"), args[5]);
+                                }
+                            }
+                            else if (args.length == 3 && args[0].equalsIgnoreCase("resize")) {
+                                return filterCompletions(Collections.singletonList("<radius>"), args[2]);
+                            }
+                            else if (args.length == 4 && args[0].equalsIgnoreCase("resize")) {
+                                return filterCompletions(Collections.singletonList("[stepCount]"), args[3]);
+                            }
+                            break;
+
+                        case "seteventspawn":
+                        case "stopevent":
+                        case "mutechat":
+                        case "clearchat":
+                        case "endvote":
+                            break;
+                    }
+                }
                 break;
         }
 
@@ -1848,6 +2554,7 @@ public final class EventTools extends JavaPlugin implements Listener {
     private void addTargetCompletions(List<String> completions) {
         completions.addAll(Arrays.asList("all", "alive", "eliminated"));
         completions.addAll(getOnlinePlayerNames());
+        teamManager.getTeamNames().forEach(name -> completions.add("@" + name));
     }
 
     private List<String> getOnlinePlayerNames() {

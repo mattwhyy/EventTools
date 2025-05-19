@@ -102,11 +102,6 @@ public class EventToolsExpansion extends PlaceholderExpansion {
                         .map(Team::getName)
                         .orElse("No Team");
 
-            case "team_color":
-                return plugin.teamManager.getPlayerTeam(player)
-                        .map(team -> team.getColor().toString())
-                        .orElse("");
-
             case "team_color_code":
                 return plugin.teamManager.getPlayerTeam(player)
                         .map(team -> "&" + team.getColor().getChar())
