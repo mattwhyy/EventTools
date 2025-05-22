@@ -27,21 +27,21 @@ public class ListCommand extends BaseCommand {
                 list.append("&aAlive Players:\n");
                 plugin.getNonBypassPlayers().stream()
                         .filter(p -> !plugin.isEliminated(p))
-                        .forEach(p -> list.append("&7- ").append(p.getName()).append("\n"));
+                        .forEach(p -> list.append("&8-&r ").append(p.getName()).append("\n"));
                 break;
             case "eliminated":
                 list.append("&cEliminated Players:\n");
                 plugin.getNonBypassPlayers().stream()
                         .filter(plugin::isEliminated)
-                        .forEach(p -> list.append("&7- ").append(p.getName()).append("\n"));
+                        .forEach(p -> list.append("&8-&r ").append(p.getName()).append("\n"));
                 break;
             case "all":
                 list.append("&6All Players:\n");
                 plugin.getNonBypassPlayers().forEach(p -> {
                     if (plugin.isEliminated(p)) {
-                        list.append("&c✖ ").append(p.getName()).append("\n");
+                        list.append("&c☠ ").append(p.getName()).append("\n");
                     } else {
-                        list.append("&a✔ ").append(p.getName()).append("\n");
+                        list.append("&a❤ ").append(p.getName()).append("\n");
                     }
                 });
                 break;

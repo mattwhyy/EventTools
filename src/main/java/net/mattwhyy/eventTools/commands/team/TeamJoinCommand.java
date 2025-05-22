@@ -46,7 +46,6 @@ public class TeamJoinCommand extends BaseCommand {
         if (currentTeam.isPresent()) {
             Team oldTeam = currentTeam.get();
             oldTeam.removeMember(player);
-            plugin.sendMessage(sender, "&aYou left team " + oldTeam.getColor() + oldTeam.getName());
         }
 
         if (plugin.teamManager.addToTeam(player, args[1])) {

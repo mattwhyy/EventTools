@@ -86,7 +86,7 @@ public class CommandManager implements TabExecutor {
             } catch (Exception e) {
                 plugin.getLogger().severe("Error executing command: " + e.getMessage());
                 e.printStackTrace();
-                plugin.sendMessage(sender, "&cAn error occurred. Please check console.");
+                plugin.sendMessage(sender, "&cAn error occurred. Please check the console.");
                 return true;
             }
         }

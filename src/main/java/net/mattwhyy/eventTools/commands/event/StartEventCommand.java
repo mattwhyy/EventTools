@@ -4,6 +4,7 @@ import net.mattwhyy.eventTools.EventTools;
 import net.mattwhyy.eventTools.commands.BaseCommand;
 import net.mattwhyy.eventTools.teams.Team;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.Sound;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
@@ -36,41 +37,49 @@ public class StartEventCommand extends BaseCommand {
         plugin.eventStartTime = System.currentTimeMillis();
         plugin.votes.clear();
 
+        Location finishPlate = plugin.getConfig().getLocation("parkour.finish-location");
+        boolean isParkour = finishPlate != null;
+
         plugin.eventTitle = args.length > 0 ? String.join(" ", args) : "Event";
 
-        if (!plugin.teamManager.getTeamNames().isEmpty()) {
-            List<Team> activeTeams = plugin.teamManager.getActiveTeams();
-
-            if (activeTeams.isEmpty()) {
-                List<String> teamNames = new ArrayList<>(plugin.teamManager.getTeamNames());
-                teamNames.forEach(plugin.teamManager::deleteTeam);
-                plugin.broadcastMessage("&6&lEVENT STARTED! &eFree-for-all mode!");
-            }
-            else if (activeTeams.size() == 1) {
-                Team team = activeTeams.get(0);
-                plugin.broadcastMessage("&6&lEVENT STARTED! &eFree-for-all mode!");
-                plugin.broadcastMessage(team.getColor() + team.getName() +
-                        " &7are playing as a group against unassigned players!");
-
-                plugin.eventType = EventTools.EventType.HYBRID_FFA;
-            }
-            else {
-                List<Player> unassignedPlayers = Bukkit.getOnlinePlayers().stream()
-                        .filter(p -> !p.hasPermission("eventtools.bypass"))
-                        .filter(p -> !plugin.teamManager.getPlayerTeam(p).isPresent())
-                        .collect(Collectors.toList());
-
-                if (!unassignedPlayers.isEmpty()) {
-                    plugin.teamManager.balanceTeams();
-                    plugin.broadcastMessage("&aBalanced &e" + unassignedPlayers.size() + " &aunassigned players!");
-                }
-
-                plugin.broadcastMessage("&6&lEVENT STARTED! &e" + activeTeams.size() + " teams competing!");
-                plugin.eventType = EventTools.EventType.TEAM_BATTLE;
-            }
+        if (isParkour) {
+            plugin.eventType = EventTools.EventType.PARKOUR;
+            plugin.broadcastMessage("&6&lPARKOUR STARTED! &eRace to the finish plate!");
         } else {
-            plugin.broadcastMessage("&6&lEVENT STARTED! &eFree-for-all mode!");
-            plugin.eventType = EventTools.EventType.PURE_FFA;
+            if (!plugin.teamManager.getTeamNames().isEmpty()) {
+                List<Team> activeTeams = plugin.teamManager.getActiveTeams();
+
+                if (activeTeams.isEmpty()) {
+                    List<String> teamNames = new ArrayList<>(plugin.teamManager.getTeamNames());
+                    teamNames.forEach(plugin.teamManager::deleteTeam);
+                    plugin.broadcastMessage("&6&lEVENT STARTED! &eFree-for-all mode!");
+                }
+                else if (activeTeams.size() == 1) {
+                    Team team = activeTeams.get(0);
+                    plugin.broadcastMessage("&6&lEVENT STARTED! &eFree-for-all mode!");
+                    plugin.broadcastMessage(team.getColor() + team.getName() +
+                            " &7are playing as a group against unassigned players!");
+
+                    plugin.eventType = EventTools.EventType.HYBRID_FFA;
+                }
+                else {
+                    List<Player> unassignedPlayers = Bukkit.getOnlinePlayers().stream()
+                            .filter(p -> !p.hasPermission("eventtools.bypass"))
+                            .filter(p -> !plugin.teamManager.getPlayerTeam(p).isPresent())
+                            .collect(Collectors.toList());
+
+                    if (!unassignedPlayers.isEmpty()) {
+                        plugin.teamManager.balanceTeams();
+                        plugin.broadcastMessage("&aBalanced &e" + unassignedPlayers.size() + " &aunassigned players!");
+                    }
+
+                    plugin.broadcastMessage("&6&lEVENT STARTED! &e" + activeTeams.size() + " teams competing!");
+                    plugin.eventType = EventTools.EventType.TEAM_BATTLE;
+                }
+            } else {
+                plugin.broadcastMessage("&6&lEVENT STARTED! &eFree-for-all mode!");
+                plugin.eventType = EventTools.EventType.PURE_FFA;
+            }
         }
 
         plugin.eventActive = true;

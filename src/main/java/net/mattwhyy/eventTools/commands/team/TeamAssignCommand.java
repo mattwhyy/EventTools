@@ -3,6 +3,7 @@ package net.mattwhyy.eventTools.commands.team;
 import net.mattwhyy.eventTools.EventTools;
 import net.mattwhyy.eventTools.commands.BaseCommand;
 import net.mattwhyy.eventTools.teams.Team;
+import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
@@ -34,12 +35,19 @@ public class TeamAssignCommand extends BaseCommand {
         }
 
         if (plugin.teamManager.addToTeam(target, args[2])) {
-            String teamName = args[2].substring(1);
-            Team team = plugin.teamManager.getTeam(teamName);
-            plugin.sendMessage(sender, "&eAssigned " + target.getName() + " to " + team.getColor() + args[2]);
-            plugin.sendMessage(target, "&aYou've been assigned to team " + team.getColor() + args[2]);
+            String cleanTeamName = ChatColor.stripColor(ChatColor.translateAlternateColorCodes('&', args[2]));
+
+            Team team = plugin.teamManager.getTeam(cleanTeamName);
+
+            if (team == null) {
+                plugin.sendMessage(sender, "&cError: Team assignment succeeded but team lookup failed!");
+                return true;
+            }
+
+            plugin.sendMessage(sender, "&eAssigned " + target.getName() + " to " + team.getColor() + team.getName());
+            plugin.sendMessage(target, "&aYou've been assigned to team " + team.getColor() + team.getName());
         } else {
-            plugin.sendMessage(sender, "&cTeam not found!");
+            plugin.sendMessage(sender, "&cFailed to assign player to team! Team might not exist.");
         }
         return true;
     }

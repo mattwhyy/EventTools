@@ -3,6 +3,7 @@ package net.mattwhyy.eventTools.commands.team;
 import net.mattwhyy.eventTools.EventTools;
 import net.mattwhyy.eventTools.commands.BaseCommand;
 import net.mattwhyy.eventTools.teams.Team;
+import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 
 import java.util.ArrayList;
@@ -21,20 +22,26 @@ public class TeamDeleteCommand extends BaseCommand {
             return true;
         }
 
-        if (plugin.teamManager.deleteTeam(args[1])) {
-            String teamName = args[1].substring(1);
-            Team team = plugin.teamManager.getTeam(teamName);
-            plugin.sendMessage(sender, "&eDeleted team " + team.getColor() + args[1]);
+        String cleanTeamName = ChatColor.stripColor(ChatColor.translateAlternateColorCodes('&', args[1]));
+        Team team = plugin.teamManager.getTeam(cleanTeamName);
 
-            if (plugin.teamManager.getTeamNames().size() == 1) {
-                String lastTeamName = plugin.teamManager.getTeamNames().get(0);
-                Team oldTeam = plugin.teamManager.getTeam(lastTeamName);
-                if (plugin.teamManager.deleteTeam(lastTeamName)) {
-                    plugin.sendMessage(sender, "&aAutomatically deleted last remaining team: &e" + oldTeam.getColor() + lastTeamName);
-                }
+        if (team == null) {
+            plugin.sendMessage(sender, "&cTeam not found!");
+            return true;
+        }
+
+        ChatColor color = team.getColor();
+        String name = team.getName();
+        int remainingTeams = plugin.teamManager.getTeamNames().size();
+
+        if (plugin.teamManager.deleteTeam(cleanTeamName)) {
+            plugin.sendMessage(sender, "&eDeleted team " + color + name);
+
+            if (remainingTeams == 1) {
+                plugin.sendMessage(sender, "&aAll teams have been deleted");
             }
         } else {
-            plugin.sendMessage(sender, "&cTeam not found!");
+            plugin.sendMessage(sender, "&cFailed to delete team!");
         }
         return true;
     }

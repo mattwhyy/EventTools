@@ -306,7 +306,7 @@ public class TeamManager {
                         })
                         .collect(Collectors.joining("&7,&r "));
 
-                plugin.broadcastMessage("&8> &7Members: " + members);
+                plugin.broadcastMessage("&8&l>&r &7Members: " + members);
             }
         }
     }

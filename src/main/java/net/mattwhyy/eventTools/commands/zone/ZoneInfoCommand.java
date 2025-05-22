@@ -39,15 +39,34 @@ public class ZoneInfoCommand extends BaseCommand {
                     .append(" &7(")
                     .append(zone.getType());
 
-            if (zone.getType() == ZoneType.TEAM_ONLY && zone.getAllowedTeam() != null) {
-                Team team = plugin.teamManager.getTeam(zone.getAllowedTeam());
-                ChatColor teamColor = team != null ? team.getColor() : ChatColor.WHITE;
-                message.append(" - ").append(teamColor).append(zone.getAllowedTeam());
+            switch (zone.getType()) {
+                case TEAM_ONLY:
+                    if (zone.getAllowedTeam() != null) {
+                        Team team = plugin.teamManager.getTeam(zone.getAllowedTeam());
+                        ChatColor teamColor = team != null ? team.getColor() : ChatColor.WHITE;
+                        message.append(" - ").append(teamColor).append(zone.getAllowedTeam());
+                    }
+                    break;
+                case DAMAGE:
+                    message.append(" - &c").append(zone.getDamage()).append(" damage/s");
+                    break;
+                case EFFECT:
+                    if (!zone.getEffects().isEmpty()) {
+                        message.append(" - &b");
+                        message.append(zone.getEffects().stream()
+                                .map(effect -> {
+                                    String effectName = effect.getType().getName();
+                                    int amplifier = effect.getAmplifier() + 1;
+                                    return effectName + " " + amplifier + " (" + (effect.getDuration()/20) + "s)";
+                                })
+                                .collect(Collectors.joining("&7, ")));
+                    }
+                    break;
             }
 
-            message.append(")");
+            message.append("&7)");
 
-            message.append("\n&8> &7Status: ")
+            message.append("\n&8&l>&r &7Status: ")
                     .append(zone.isActive() ? "&aActive" : "&cInactive")
                     .append("&7, Radius: ")
                     .append(zone.getRadius())
@@ -55,7 +74,7 @@ public class ZoneInfoCommand extends BaseCommand {
                     .append(zone.getShape());
 
             Location center = zone.getCenter();
-            message.append("\n&8> &7Location: ")
+            message.append("\n&8&l>&r &7Location: ")
                     .append(center.getWorld().getName())
                     .append(" &8(")
                     .append(center.getBlockX())
@@ -66,7 +85,7 @@ public class ZoneInfoCommand extends BaseCommand {
                     .append(")");
 
             Set<Player> playersInZone = zone.getPlayersInside();
-            message.append("\n&8> &7Players: ");
+            message.append("\n&8&l>&r &7Players: ");
             if (playersInZone.isEmpty()) {
                 message.append("&7None");
             } else {

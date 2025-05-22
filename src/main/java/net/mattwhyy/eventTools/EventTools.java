@@ -5,9 +5,11 @@ import net.mattwhyy.eventTools.teams.Team;
 import net.mattwhyy.eventTools.teams.TeamManager;
 import net.mattwhyy.eventTools.zones.ZoneManager;
 import org.bukkit.*;
+import org.bukkit.block.Block;
 import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.event.block.Action;
 import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.entity.Firework;
 import org.bukkit.entity.Player;
@@ -15,6 +17,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.FireworkMeta;
@@ -62,7 +65,8 @@ public final class EventTools extends JavaPlugin implements Listener {
     public enum EventType {
         PURE_FFA,
         HYBRID_FFA,
-        TEAM_BATTLE
+        TEAM_BATTLE,
+        PARKOUR
     }
 
     private FileConfiguration config;
@@ -439,9 +443,29 @@ public final class EventTools extends JavaPlugin implements Listener {
                 broadcastMessage(playerTeam.getColor() + playerTeam.getName() + " &chas been fully eliminated!");
             }
             broadcastMessage(playerTeam.getColor() + playerTeam.getName() +
-                    " &7> &c" + player.getName() + " has been eliminated!");
+                    " &8&l>&r &c☠ " + player.getName() + " has been eliminated!");
         } else {
-            broadcastMessage("&c" + player.getName() + " has been eliminated!");
+            broadcastMessage("&c☠ " + player.getName() + " has been eliminated!");
+        }
+
+        checkForEventEnd();
+    }
+
+    public void handleMidEventJoin(Player player) {
+        if (!eliminatePlayer(player)) return;
+
+        Optional<Team> team = teamManager.getPlayerTeam(player);
+
+        if (team.isPresent()) {
+            Team playerTeam = team.get();
+            if (!teamManager.isTeamActive(playerTeam)) {
+                teamManager.markTeamEliminated(playerTeam);
+                broadcastMessage(playerTeam.getColor() + playerTeam.getName() + " &chas been fully eliminated because a member joined mid-event!");
+            }
+            broadcastMessage(playerTeam.getColor() + playerTeam.getName() +
+                    " &8&l>&r &c☠ " + player.getName() + " was eliminated for joining mid-event!");
+        } else {
+            broadcastMessage("&c☠ " + player.getName() + " was eliminated for joining mid-event!");
         }
 
         checkForEventEnd();
@@ -669,7 +693,7 @@ public final class EventTools extends JavaPlugin implements Listener {
         if (player.hasPermission("eventtools.bypass")) return;
 
         if (eventActive) {
-            handleElimination(player);
+            handleMidEventJoin(player);
             sendMessage(player, "&cYou joined mid-event and were automatically eliminated!");
         }
     }

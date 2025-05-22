@@ -31,12 +31,12 @@ public class TeamInfoCommand extends BaseCommand {
                     .append(team.size())
                     .append(" Member").append(team.size() != 1 ? "s" : "").append(")");
 
-            message.append("\n&8> &7Settings: ");
+            message.append("\n&8&l>&r &7Settings: ");
             message.append("Friendly Fire: ").append(team.friendlyFire ? "&atrue" : "&cfalse");
             message.append("&7, Collision: ").append(team.collisionEnabled ? "&atrue" : "&cfalse");
             message.append("&7, Nametags: ").append(team.nameTagVisibility ? "&atrue" : "&cfalse");
 
-            message.append("\n&8> &7Members: ");
+            message.append("\n&8&l>&r &7Members: ");
             if (team.getMembers().isEmpty()) {
                 message.append("&7None");
             } else {
