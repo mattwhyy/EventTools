@@ -37,6 +37,9 @@ public class Team {
     public boolean friendlyFire = false;
     public boolean nameTagVisibility = true;
     public boolean collisionEnabled = true;
+    public boolean fallDamageEnabled = true;
+    public boolean hungerDecayEnabled = true;
+    public boolean invulnerable = false;
 
     public void setFriendlyFire(boolean enabled) {
         this.friendlyFire = enabled;
@@ -50,6 +53,21 @@ public class Team {
 
     public void setCollisionEnabled(boolean enabled) {
         this.collisionEnabled = enabled;
+        updateTeamProperties();
+    }
+
+    public void setFallDamageEnabled(boolean enabled) {
+        this.fallDamageEnabled = enabled;
+        updateTeamProperties();
+    }
+
+    public void setHungerDecayEnabled(boolean enabled) {
+        this.hungerDecayEnabled = enabled;
+        updateTeamProperties();
+    }
+
+    public void setInvulnerable(boolean invulnerable) {
+        this.invulnerable = invulnerable;
         updateTeamProperties();
     }
 
@@ -72,6 +90,9 @@ public class Team {
     public String getName() { return name; }
     public ChatColor getColor() { return color; }
     public Set<UUID> getMembers() { return new HashSet<>(members); }
+    public boolean isFallDamageEnabled() { return fallDamageEnabled; }
+    public boolean isHungerDecayEnabled() { return hungerDecayEnabled; }
+    public boolean isInvulnerable() { return invulnerable; }
     public List<Player> getOnlineMembers() {
         List<Player> onlineMembers = new ArrayList<>();
         for (UUID memberId : members) {
@@ -132,5 +153,28 @@ public class Team {
                     scoreboardTeam.removeEntry(player.getName());
                     scoreboardTeam.addEntry(player.getName());
                 });
+    }
+
+    private boolean teamChatEnabled = false;
+    private final Set<UUID> teamChatToggled = new HashSet<>();
+
+    public void setTeamChatEnabled(boolean enabled) {
+        this.teamChatEnabled = enabled;
+    }
+
+    public boolean isTeamChatEnabled() {
+        return teamChatEnabled;
+    }
+
+    public void toggleTeamChat(UUID playerId) {
+        if (teamChatToggled.contains(playerId)) {
+            teamChatToggled.remove(playerId);
+        } else {
+            teamChatToggled.add(playerId);
+        }
+    }
+
+    public boolean hasTeamChatToggled(UUID playerId) {
+        return teamChatToggled.contains(playerId);
     }
 }

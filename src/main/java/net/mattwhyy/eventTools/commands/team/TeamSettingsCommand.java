@@ -11,26 +11,36 @@ import java.util.Arrays;
 import java.util.List;
 
 public class TeamSettingsCommand extends BaseCommand {
+
     public TeamSettingsCommand(EventTools plugin) {
         super(plugin);
     }
+
+    public static final List<String> ALL_PROPERTIES = Arrays.asList(
+            "friendlyfire",
+            "nametags",
+            "collision",
+            "falldamage",
+            "hungerdecay",
+            "invulnerable"
+    );
 
     @Override
     public boolean execute(CommandSender sender, String[] args) {
         if (!requirePermission(sender, "eventtools.admin")) return true;
         if (args.length < 4) {
-            plugin.sendMessage(sender, "&cUsage: /team settings <team|all> <property> <true|false>");
-            plugin.sendMessage(sender, "&7Properties: friendlyfire, nametags, collision");
-            return true;
-        }
-        if (!Arrays.asList("friendlyfire", "nametags", "collision").contains(args[2].toLowerCase())) {
-            plugin.sendMessage(sender, "&cInvalid property! Use: friendlyfire, nametags, collision");
+            sendUsage(sender);
             return true;
         }
 
         String teamName = args[1];
         String property = args[2].toLowerCase();
         boolean value = args[3].equalsIgnoreCase("true");
+
+        if (!ALL_PROPERTIES.contains(property)) {
+            sendUsage(sender);
+            return true;
+        }
 
         if (teamName.equalsIgnoreCase("all")) {
             plugin.teamManager.getAllTeams().forEach(team -> updateTeamSetting(team, property, value));
@@ -49,11 +59,31 @@ public class TeamSettingsCommand extends BaseCommand {
         return true;
     }
 
+    private void sendUsage(CommandSender sender) {
+        plugin.sendMessage(sender, "&cUsage: /team settings <team|all> <property> <true|false>");
+        plugin.sendMessage(sender, "&7Properties: " + String.join(", ", ALL_PROPERTIES));
+    }
+
     private void updateTeamSetting(Team team, String property, boolean value) {
         switch (property) {
-            case "friendlyfire": team.setFriendlyFire(value); break;
-            case "nametags": team.setNameTagVisibility(value); break;
-            case "collision": team.setCollisionEnabled(value); break;
+            case "friendlyfire":
+                team.setFriendlyFire(value);
+                break;
+            case "nametags":
+                team.setNameTagVisibility(value);
+                break;
+            case "collision":
+                team.setCollisionEnabled(value);
+                break;
+            case "falldamage":
+                team.setFallDamageEnabled(value);
+                break;
+            case "hungerdecay":
+                team.setHungerDecayEnabled(value);
+                break;
+            case "invulnerable":
+                team.setInvulnerable(value);
+                break;
         }
     }
 
@@ -64,7 +94,7 @@ public class TeamSettingsCommand extends BaseCommand {
             completions.addAll(plugin.teamManager.getTeamNames());
             completions.add("all");
         } else if (args.length == 3) {
-            completions.addAll(Arrays.asList("friendlyfire", "nametags", "collision"));
+            completions.addAll(ALL_PROPERTIES);
         } else if (args.length == 4) {
             completions.addAll(Arrays.asList("true", "false"));
         }

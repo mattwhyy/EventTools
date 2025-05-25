@@ -9,10 +9,10 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.Objects;
 
-public class EventToolsExpansion extends PlaceholderExpansion {
+public class PlaceholderAPIManager extends PlaceholderExpansion {
     private final EventTools plugin;
 
-    public EventToolsExpansion(EventTools plugin) {
+    public PlaceholderAPIManager(EventTools plugin) {
         this.plugin = plugin;
     }
 

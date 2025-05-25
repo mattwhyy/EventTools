@@ -1,39 +1,44 @@
 package net.mattwhyy.eventTools;
 
+import github.scarsz.discordsrv.dependencies.jda.api.EmbedBuilder;
 import net.mattwhyy.eventTools.commands.CommandManager;
 import net.mattwhyy.eventTools.teams.Team;
 import net.mattwhyy.eventTools.teams.TeamManager;
 import net.mattwhyy.eventTools.zones.ZoneManager;
+import net.milkbowl.vault.chat.Chat;
 import org.bukkit.*;
-import org.bukkit.block.Block;
 import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
-import org.bukkit.event.block.Action;
-import org.bukkit.event.player.PlayerCommandPreprocessEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.FoodLevelChangeEvent;
+import org.bukkit.event.player.*;
 import org.bukkit.entity.Firework;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.PlayerDeathEvent;
-import org.bukkit.event.player.AsyncPlayerChatEvent;
-import org.bukkit.event.player.PlayerInteractEvent;
-import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.FireworkMeta;
+import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
 
+import java.io.File;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 public final class EventTools extends JavaPlugin implements Listener {
 
-    private EventToolsExpansion expansion;
+    private PlaceholderAPIManager papiManager;
+    private DiscordSRVManager discordManager;
+    public Chat chat = null;
 
     public final Set<UUID> eliminatedPlayers = ConcurrentHashMap.newKeySet();
     public final List<UUID> eliminationOrder = Collections.synchronizedList(new ArrayList<>());
@@ -65,18 +70,24 @@ public final class EventTools extends JavaPlugin implements Listener {
     public enum EventType {
         PURE_FFA,
         HYBRID_FFA,
-        TEAM_BATTLE,
-        PARKOUR
+        TEAM_BATTLE
     }
 
     private FileConfiguration config;
 
     @Override
     public void onEnable() {
-        saveDefaultConfig();
-        config = getConfig();
+        File configFile = new File(getDataFolder(), "config.yml");
+        if (!configFile.exists()) {
+            saveDefaultConfig();
+            config = getConfig();
+        } else {
+            getConfig().options().copyDefaults(true);
+            saveConfig();
+            config = getConfig();
+        }
 
-        getLogger().info("EventTools has been enabled!");
+        getLogger().info("EventTools has been enabled");
 
         this.commandManager = new CommandManager(this);
         registerCommandExecutors();
@@ -93,8 +104,17 @@ public final class EventTools extends JavaPlugin implements Listener {
         this.zoneManager.startParticleRenderer();
 
         if (Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI")) {
-            this.expansion = new EventToolsExpansion(this);
-            this.expansion.register();
+            this.papiManager = new PlaceholderAPIManager(this);
+            this.papiManager.register();
+            getLogger().info("Hooked into PlaceHolderAPI");
+        }
+        if (Bukkit.getPluginManager().isPluginEnabled("Vault")) {
+            setupChat();
+            getLogger().info("Hooked into Vault");
+        }
+        if (Bukkit.getPluginManager().isPluginEnabled("DiscordSRV")) {
+            this.discordManager = new DiscordSRVManager(this);
+            getLogger().info("Hooked into DiscordSRV");
         }
     }
 
@@ -119,6 +139,7 @@ public final class EventTools extends JavaPlugin implements Listener {
         getCommand("numberguess").setExecutor(commandManager);
         getCommand("mutechat").setExecutor(commandManager);
         getCommand("clearchat").setExecutor(commandManager);
+        getCommand("broadcast").setExecutor(commandManager);
         getCommand("list").setExecutor(commandManager);
         getCommand("zone").setExecutor(commandManager);
         getCommand("team").setExecutor(commandManager);
@@ -127,13 +148,19 @@ public final class EventTools extends JavaPlugin implements Listener {
     @Override
     public void onDisable() {
         cleanupTasks();
-        if (this.expansion != null) {
-            this.expansion.unregister();
+        getLogger().info("EventTools has been disabled");
+    }
+
+    private void setupChat() {
+        RegisteredServiceProvider<Chat> rsp = getServer().getServicesManager().getRegistration(Chat.class);
+        if (rsp == null) {
+            return;
         }
-        if (zoneManager != null) {
-            zoneManager.shutdown();
-        }
-        getLogger().info("EventTools has been disabled!");
+        chat = rsp.getProvider();
+    }
+
+    public DiscordSRVManager getDiscordManager() {
+        return discordManager;
     }
 
     public List<Player> getTargetPlayers(CommandSender sender, String target) {
@@ -243,6 +270,12 @@ public final class EventTools extends JavaPlugin implements Listener {
         if (voteTask != null) {
             voteTask.cancel();
             voteTask = null;
+        }
+        if (this.papiManager != null) {
+            this.papiManager.unregister();
+        }
+        if (zoneManager != null) {
+            zoneManager.shutdown();
         }
         activeResizeTasks.values().forEach(BukkitTask::cancel);
         activeResizeTasks.clear();
@@ -440,12 +473,12 @@ public final class EventTools extends JavaPlugin implements Listener {
             Team playerTeam = team.get();
             if (!teamManager.isTeamActive(playerTeam)) {
                 teamManager.markTeamEliminated(playerTeam);
-                broadcastMessage(playerTeam.getColor() + playerTeam.getName() + " &chas been fully eliminated!");
+                broadcastMessage("&c☠ " + playerTeam.getColor() + playerTeam.getName() + " &chas been fully eliminated!");
             }
             broadcastMessage(playerTeam.getColor() + playerTeam.getName() +
-                    " &8&l>&r &c☠ " + player.getName() + " has been eliminated!");
+                    " &8&l>&r &c☠ " + player.getName() +  " &chas been eliminated!");
         } else {
-            broadcastMessage("&c☠ " + player.getName() + " has been eliminated!");
+            broadcastMessage("&c☠ " + player.getName() + " &chas been eliminated!");
         }
 
         checkForEventEnd();
@@ -460,12 +493,12 @@ public final class EventTools extends JavaPlugin implements Listener {
             Team playerTeam = team.get();
             if (!teamManager.isTeamActive(playerTeam)) {
                 teamManager.markTeamEliminated(playerTeam);
-                broadcastMessage(playerTeam.getColor() + playerTeam.getName() + " &chas been fully eliminated because a member joined mid-event!");
+                broadcastMessage("&c☠ " + playerTeam.getColor() + playerTeam.getName() + " &chas been fully eliminated because a member joined mid-event!");
             }
             broadcastMessage(playerTeam.getColor() + playerTeam.getName() +
-                    " &8&l>&r &c☠ " + player.getName() + " was eliminated for joining mid-event!");
+                    " &8&l>&r &c☠ " + player.getName() + " &cwas eliminated for joining mid-event!");
         } else {
-            broadcastMessage("&c☠ " + player.getName() + " was eliminated for joining mid-event!");
+            broadcastMessage("&c☠ " + player.getName() + " &cwas eliminated for joining mid-event!");
         }
 
         checkForEventEnd();
@@ -489,6 +522,7 @@ public final class EventTools extends JavaPlugin implements Listener {
                     Player winner = alivePlayers.get(0);
                     celebrateVictory(winner, "&6&lWINNER", "&7" + winner.getName());
                     announceFinalPlacements();
+                    sendEventStatsEmbed();
                     resetEvent();
                 }
                 break;
@@ -523,11 +557,26 @@ public final class EventTools extends JavaPlugin implements Listener {
                     Firework fw = fireLoc.getWorld().spawn(fireLoc, Firework.class);
                     FireworkMeta meta = fw.getFireworkMeta();
 
-                    Color randomColor = Color.fromRGB(
-                            random.nextInt(256),
-                            random.nextInt(256),
-                            random.nextInt(256)
-                    );
+                    Color[] allowedColors = {
+                    Color.AQUA,
+                    Color.BLACK,
+                    Color.BLUE,
+                    Color.TEAL,
+                    Color.NAVY,
+                    Color.GRAY,
+                    Color.GREEN,
+                    Color.PURPLE,
+                    Color.MAROON,
+                    Color.ORANGE,
+                    Color.SILVER,
+                    Color.LIME,
+                    Color.FUCHSIA,
+                    Color.RED,
+                    Color.WHITE,
+                    Color.YELLOW
+                    };
+
+                    Color randomColor = allowedColors[random.nextInt(allowedColors.length)];
 
                     meta.addEffect(FireworkEffect.builder()
                             .with(FireworkEffect.Type.BALL)
@@ -622,6 +671,56 @@ public final class EventTools extends JavaPlugin implements Listener {
         String[] colors = {"&6", "&7", "&c", "&f", "&f"};
         String[] icons = {"🥇 ", "🥈 ", "🥉 ", "", ""};
 
+
+        if (discordManager != null && discordManager.isEnabled()) {
+            String winnerColor = config.getString("discord.colors.event-results", "#FFA500");
+            String otherPlacementsColor = config.getString("discord.colors.event-other-placements", "#C4C4C4");
+            EmbedBuilder top3Embed = new EmbedBuilder()
+                    .setTitle(eventTitle + " Results 🏆")
+                    .setColor(java.awt.Color.decode(winnerColor));
+
+            for (int i = 0; i < Math.min(3, placements.size()); i++) {
+                UUID playerId = placements.get(i);
+                OfflinePlayer player = Bukkit.getOfflinePlayer(playerId);
+                String name = player.getName() != null ? player.getName() : "Unknown";
+
+                String[] medals = {"🥇 **WINNER**", "🥈 Runner-Up", "🥉 Third Place"};
+                String[] fieldColors = {"#FFD700", "#C0C0C0", "#CD7F32"};
+
+                top3Embed.addField(
+                        medals[i],
+                        "**" + name + "**",
+                        false
+                );
+            }
+
+            top3Embed.setFooter("Event ended")
+                    .setTimestamp(Instant.now());
+
+            getDiscordManager().sendEmbed(top3Embed.build());
+
+            if (placements.size() > 3) {
+                EmbedBuilder remainingEmbed = new EmbedBuilder()
+                        .setTitle("Other Placements")
+                        .setFooter("Thanks for playing!")
+                        .setColor(java.awt.Color.decode(otherPlacementsColor));
+
+                for (int i = 3; i < Math.min(5, placements.size()); i++) {
+                    UUID playerId = placements.get(i);
+                    OfflinePlayer player = Bukkit.getOfflinePlayer(playerId);
+                    String name = player.getName() != null ? player.getName() : "Unknown";
+
+                    remainingEmbed.addField(
+                            (i + 1) + "th Place",
+                            name,
+                            true
+                    );
+                }
+
+                getDiscordManager().sendEmbed(remainingEmbed.build());
+            }
+        }
+
         for (int i = 0; i < Math.min(5, placements.size()); i++) {
             UUID playerId = placements.get(i);
             OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(playerId);
@@ -659,6 +758,27 @@ public final class EventTools extends JavaPlugin implements Listener {
     public void broadcastSound(Sound sound, float volume, float pitch) {
         for (Player player : Bukkit.getOnlinePlayers()) {
             playSound(player, sound, volume, pitch);
+        }
+    }
+
+    private void sendEventStatsEmbed() {
+        if (discordManager.isEnabled()) {
+            long durationMillis = System.currentTimeMillis() - eventStartTime;
+            String duration = String.format("%d min %d sec",
+                    TimeUnit.MILLISECONDS.toMinutes(durationMillis),
+                    TimeUnit.MILLISECONDS.toSeconds(durationMillis) % 60
+            );
+
+            int participants = eliminationOrder.size() + (eventActive ? 1 : 0);
+            String statsColor = config.getString("discord.colors.info", "#0099FF");
+
+            EmbedBuilder statsEmbed = new EmbedBuilder()
+                    .setTitle("📊 Event Stats")
+                    .setColor(java.awt.Color.decode(statsColor))
+                    .addField("Duration", duration, true)
+                    .addField("Participants", String.valueOf(participants), true);
+
+            getDiscordManager().sendEmbed(statsEmbed.build());
         }
     }
 
@@ -709,6 +829,46 @@ public final class EventTools extends JavaPlugin implements Listener {
     }
 
     @EventHandler
+    public void onEntityDamage(EntityDamageEvent event) {
+
+        if (event.getEntity() instanceof Player) {
+            Player player = (Player) event.getEntity();
+            if (player.hasPermission("eventtools.bypass")) return;
+
+            Optional<Team> team = teamManager.getPlayerTeam(player);
+            if (team.isPresent()) {
+                Team playerTeam = team.get();
+
+                if (event.getCause() == EntityDamageEvent.DamageCause.FALL) {
+                    if (!playerTeam.isFallDamageEnabled() || playerTeam.isInvulnerable()) {
+                        event.setCancelled(true);
+                    }
+                } else {
+                    if (playerTeam.isInvulnerable()) {
+                        event.setCancelled(true);
+                    }
+                }
+            }
+        }
+    }
+
+    @EventHandler
+    public void onFoodLevelChange(FoodLevelChangeEvent event) {
+
+        if (event.getEntity() instanceof Player) {
+            Player player = (Player) event.getEntity();
+            if (player.hasPermission("eventtools.bypass")) return;
+
+            Optional<Team> team = teamManager.getPlayerTeam(player);
+            if (team.isPresent() && !team.get().isHungerDecayEnabled()) {
+                if (event.getFoodLevel() < player.getFoodLevel()) {
+                    event.setCancelled(true);
+                }
+            }
+        }
+    }
+
+    @EventHandler
     public void onCommandPreprocess(PlayerCommandPreprocessEvent event) {
         Player player = event.getPlayer();
         if (!chatMuted || player.hasPermission("eventtools.bypass")) {
@@ -745,10 +905,18 @@ public final class EventTools extends JavaPlugin implements Listener {
     @EventHandler
     public void onChat(AsyncPlayerChatEvent event) {
         Player player = event.getPlayer();
+        String message = event.getMessage();
 
         if (chatMuted && !player.hasPermission("eventtools.bypass")) {
             event.setCancelled(true);
             sendMessage(player, "&cChat is currently muted!");
+            return;
+        }
+
+        Optional<Team> team = teamManager.getPlayerTeam(player);
+        if (team.isPresent() && team.get().hasTeamChatToggled(player.getUniqueId())) {
+            event.setCancelled(true);
+            sendTeamChatMessage(player, team.get(), message);
             return;
         }
 
@@ -769,19 +937,42 @@ public final class EventTools extends JavaPlugin implements Listener {
         }
 
         if (voteInProgress) {
-            String message = event.getMessage().toLowerCase();
-            if (message.equals("yes") || message.equals("y") || message.equals("agree")) {
+            String lcmessage = event.getMessage().toLowerCase();
+            if (lcmessage.equals("yes") || lcmessage.equals("y") || lcmessage.equals("agree")) {
                 votes.put(player.getUniqueId(), true);
                 sendMessage(player, "&7Your &aYES &7vote has been counted!");
                 playSound(player, Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1, 1.5f);
                 event.setCancelled(true);
             }
-            else if (message.equals("no") || message.equals("n") || message.equals("disagree")) {
+            else if (lcmessage.equals("no") || lcmessage.equals("n") || lcmessage.equals("disagree")) {
                 votes.put(player.getUniqueId(), false);
                 sendMessage(player, "&7Your &cNO &7vote has been counted!");
                 playSound(player, Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1, 1.5f);
                 event.setCancelled(true);
             }
         }
+    }
+
+    private void sendTeamChatMessage(Player sender, Team team, String message) {
+        String prefix = chat.getPlayerPrefix(sender);
+        String suffix = chat.getPlayerSuffix(sender);
+        String formatted = String.format(team.getColor() + team.getName() +
+                " &8&l>&r " + prefix + sender.getDisplayName() + suffix + "&r: " + message
+        );
+
+        team.getOnlineMembers().forEach(member ->
+                sendMessage(member, formatted)
+        );
+
+        Bukkit.getOnlinePlayers().stream()
+                .filter(p -> p.hasPermission("eventtools.bypass"))
+                .filter(p -> !team.getMembers().contains(p.getUniqueId()))
+                .forEach(staff ->
+                        sendMessage(staff,
+                                "&8&lSPY&r " + team.getColor() + team.getName() +
+                                        " &8&l>&r " + prefix + sender.getName() + suffix + "&r: " + message)
+                );
+
+        getLogger().info("[TEAM-CHAT] " + team.getColor() + team.getName() + prefix + sender.getName() + suffix + message);
     }
 }

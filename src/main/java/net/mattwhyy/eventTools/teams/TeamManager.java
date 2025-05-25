@@ -1,5 +1,6 @@
 package net.mattwhyy.eventTools.teams;
 
+import github.scarsz.discordsrv.dependencies.jda.api.EmbedBuilder;
 import net.mattwhyy.eventTools.EventTools;
 import org.bukkit.*;
 import org.bukkit.entity.EntityType;
@@ -9,8 +10,10 @@ import org.bukkit.inventory.meta.FireworkMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
 
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.bukkit.Bukkit.broadcastMessage;
@@ -208,6 +211,7 @@ public class TeamManager {
             }
 
             announceFinalTeamPlacements();
+            sendTeamStatsEmbed();
             new ArrayList<>(teams.keySet()).forEach(this::deleteTeam);
             plugin.resetEvent();
         }
@@ -263,6 +267,8 @@ public class TeamManager {
                 "&6&lWINNER",
                 team.getColor() + team.getName()
         );
+        plugin.broadcastSound(Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1, 0.5f);
+        plugin.broadcastSound(Sound.ENTITY_FIREWORK_ROCKET_LAUNCH, 1, 1);
     }
 
     private void announceFinalTeamPlacements() {
@@ -282,7 +288,7 @@ public class TeamManager {
             }
         }
 
-        plugin.broadcastMessage("&6&lTeam Results:");
+        plugin.broadcastMessage("&6&lTeam Event Results:");
         String[] suffixes = {"1st", "2nd", "3rd", "4th", "5th"};
         String[] colors = {"&6", "&7", "&c", "&f", "&f"};
         String[] icons = {"🥇 ", "🥈 ", "🥉 ", "", ""};
@@ -309,6 +315,60 @@ public class TeamManager {
                 plugin.broadcastMessage("&8&l>&r &7Members: " + members);
             }
         }
+        sendTeamPlacementsEmbed(placements);
+    }
+
+    private void sendTeamPlacementsEmbed(List<Team> placements) {
+        if (plugin.getDiscordManager() == null) {
+            return;
+        }
+        String winnerColor = plugin.getConfig().getString("discord.colors.event-results", "#FFA500");
+        String otherColor = plugin.getConfig().getString("discord.colors.event-other-placements", "#C4C4C4");
+
+        EmbedBuilder topTeamsEmbed = new EmbedBuilder()
+                .setTitle(plugin.eventTitle + " Team Results 🏆")
+                .setColor(java.awt.Color.decode(winnerColor));
+
+        for (int i = 0; i < Math.min(3, placements.size()); i++) {
+            Team team = placements.get(i);
+            String[] medals = {"🥇 **WINNING TEAM**", "🥈 Runner-Up", "🥉 Third Place"};
+
+            String members = team.getMembers().stream()
+                    .map(uuid -> {
+                        OfflinePlayer player = Bukkit.getOfflinePlayer(uuid);
+                        return player.getName() != null ? player.getName() : "Unknown";
+                    })
+                    .collect(Collectors.joining("\n"));
+
+            topTeamsEmbed.addField(
+                    medals[i] + " - " + team.getName(),
+                    members,
+                    false
+            );
+        }
+
+        topTeamsEmbed.setFooter("Event ended")
+                .setTimestamp(Instant.now());
+
+        plugin.getDiscordManager().sendEmbed(topTeamsEmbed.build());
+
+        if (placements.size() > 3) {
+            EmbedBuilder otherTeamsEmbed = new EmbedBuilder()
+                    .setTitle("Other Team Placements")
+                    .setColor(java.awt.Color.decode(otherColor))
+                    .setFooter("Thanks for playing!");
+
+            for (int i = 3; i < Math.min(5, placements.size()); i++) {
+                Team team = placements.get(i);
+                otherTeamsEmbed.addField(
+                        (i+1) + "th Place",
+                        team.getName(),
+                        false
+                );
+            }
+
+            plugin.getDiscordManager().sendEmbed(otherTeamsEmbed.build());
+        }
     }
 
     private Color getBukkitColor(ChatColor chatColor) {
@@ -331,5 +391,32 @@ public class TeamManager {
             case YELLOW: return Color.YELLOW;
             default: return Color.WHITE;
         }
+    }
+
+    public void sendTeamStatsEmbed() {
+        if (plugin.getDiscordManager() == null) {
+            return;
+        }
+        long durationMillis = System.currentTimeMillis() - plugin.eventStartTime;
+        String duration = String.format("%d min %d sec",
+                TimeUnit.MILLISECONDS.toMinutes(durationMillis),
+                TimeUnit.MILLISECONDS.toSeconds(durationMillis) % 60
+        );
+
+        int participants = teams.values().stream()
+                .mapToInt(Team::size)
+                .sum();
+
+
+        String statsColor = plugin.getConfig().getString("discord.colors.info", "#0099FF");
+
+        EmbedBuilder statsEmbed = new EmbedBuilder()
+                .setTitle("📊 Team Event Stats")
+                .setColor(java.awt.Color.decode(statsColor))
+                .addField("Duration", duration, true)
+                .addField("Teams", String.valueOf(teams.size()), true)
+                .addField("Participants", String.valueOf(participants), true);
+
+        plugin.getDiscordManager().sendEmbed(statsEmbed.build());
     }
 }

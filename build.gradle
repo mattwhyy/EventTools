@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'net.mattwhyy'
-version = '1.03-BETA'
+version = '1.03'
 
 repositories {
     mavenCentral()
@@ -17,13 +17,21 @@ repositories {
         url = "https://oss.sonatype.org/content/groups/public/"
     }
     maven {
-        url = 'https://repo.extendedclip.com/releases/'
+        url = 'https://repo.extendedclip.com/releases/' // PAPI
+    }
+    maven {
+        url = 'https://jitpack.io' // Vault
+    }
+    maven {
+        url = 'https://nexus.scarsz.me/content/groups/public/' // DiscordSRV
     }
 }
 
 dependencies {
     compileOnly("io.papermc.paper:paper-api:1.20.1-R0.1-SNAPSHOT")
     compileOnly 'me.clip:placeholderapi:2.11.6'
+    compileOnly "com.github.MilkBowl:VaultAPI:1.7"
+    compileOnly 'com.discordsrv:discordsrv:1.27.0'
 }
 
 tasks {

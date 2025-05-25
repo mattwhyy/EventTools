@@ -31,7 +31,7 @@ public class EventZone {
     }
 
     public void setRadius(int radius) {
-        this.radius = Math.min(radius, 50);
+        this.radius = Math.min(radius, 100);
     }
 
     public boolean canAccess(Player player) {
@@ -47,7 +47,7 @@ public class EventZone {
         this.name = name;
         this.center = center;
         this.shape = shape;
-        this.radius = Math.min(radius, 50);
+        this.radius = Math.min(radius, 100);
         this.type = type;
         this.teamManager = teamManager;
         this.active = true;

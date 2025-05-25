@@ -9,6 +9,7 @@ import org.bukkit.Sound;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
+import java.awt.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -37,16 +38,9 @@ public class StartEventCommand extends BaseCommand {
         plugin.eventStartTime = System.currentTimeMillis();
         plugin.votes.clear();
 
-        Location finishPlate = plugin.getConfig().getLocation("parkour.finish-location");
-        boolean isParkour = finishPlate != null;
-
         plugin.eventTitle = args.length > 0 ? String.join(" ", args) : "Event";
 
-        if (isParkour) {
-            plugin.eventType = EventTools.EventType.PARKOUR;
-            plugin.broadcastMessage("&6&lPARKOUR STARTED! &eRace to the finish plate!");
-        } else {
-            if (!plugin.teamManager.getTeamNames().isEmpty()) {
+        if (!plugin.teamManager.getTeamNames().isEmpty()) {
                 List<Team> activeTeams = plugin.teamManager.getActiveTeams();
 
                 if (activeTeams.isEmpty()) {
@@ -79,7 +73,6 @@ public class StartEventCommand extends BaseCommand {
             } else {
                 plugin.broadcastMessage("&6&lEVENT STARTED! &eFree-for-all mode!");
                 plugin.eventType = EventTools.EventType.PURE_FFA;
-            }
         }
 
         plugin.eventActive = true;
@@ -91,6 +84,13 @@ public class StartEventCommand extends BaseCommand {
                 plugin.getConfig().getString("messages.event-start-title", "§6Event started!"),
                 plugin.getConfig().getString("messages.event-start-subtitle", "§eGood luck!")
         );
+
+        if (plugin.getDiscordManager().isEnabled()) {
+            String hex = plugin.getConfig().getString("discord.colors.event-start", "#00FF00");
+            plugin.getDiscordManager().broadcastAnnouncement(plugin.eventTitle, plugin.getConfig().getString(
+                    "discord.messages.event-start-desc", "An event has started!"), Color.decode(hex)
+            );
+        }
         return true;
     }
 

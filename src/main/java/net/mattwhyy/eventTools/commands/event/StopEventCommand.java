@@ -4,6 +4,7 @@ import net.mattwhyy.eventTools.EventTools;
 import net.mattwhyy.eventTools.commands.BaseCommand;
 import org.bukkit.command.CommandSender;
 
+import java.awt.*;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -27,6 +28,13 @@ public class StopEventCommand extends BaseCommand {
         plugin.resetEvent();
         plugin.eventStartTime = 0;
         plugin.broadcastMessage("&a&lEVENT ENDED!");
+
+        if (plugin.getDiscordManager().isEnabled()) {
+            String hex = plugin.getConfig().getString("discord.colors.event-end", "#FF0000");
+            plugin.getDiscordManager().broadcastAnnouncement(plugin.eventTitle, plugin.getConfig().getString(
+                    "discord.messages.event-end-desc", "The event has ended!"), Color.decode(hex)
+            );
+        }
         return true;
     }
 

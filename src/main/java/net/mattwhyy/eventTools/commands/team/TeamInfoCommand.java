@@ -32,9 +32,12 @@ public class TeamInfoCommand extends BaseCommand {
                     .append(" Member").append(team.size() != 1 ? "s" : "").append(")");
 
             message.append("\n&8&l>&r &7Settings: ");
-            message.append("Friendly Fire: ").append(team.friendlyFire ? "&atrue" : "&cfalse");
+            message.append("&7Friendly Fire: ").append(team.friendlyFire ? "&atrue" : "&cfalse");
             message.append("&7, Collision: ").append(team.collisionEnabled ? "&atrue" : "&cfalse");
             message.append("&7, Nametags: ").append(team.nameTagVisibility ? "&atrue" : "&cfalse");
+            message.append("&7, Fall Damage: ").append(team.fallDamageEnabled ? "&atrue" : "&cfalse");
+            message.append("&7, Hunger Decay: ").append(team.hungerDecayEnabled ? "&atrue" : "&cfalse");
+            message.append("&7, Invulnerable: ").append(team.invulnerable ? "&atrue" : "&cfalse");
 
             message.append("\n&8&l>&r &7Members: ");
             if (team.getMembers().isEmpty()) {

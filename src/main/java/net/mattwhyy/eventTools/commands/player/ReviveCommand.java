@@ -43,13 +43,15 @@ public class ReviveCommand extends BaseCommand {
         }
 
         Player target = plugin.getServer().getPlayer(args[0]);
+        String prefix = plugin.chat.getPlayerPrefix(target);
+        String suffix = plugin.chat.getPlayerSuffix(target);
         if (target == null) {
             plugin.sendMessage(sender, "&cPlayer not found!");
             return true;
         }
 
         if (plugin.revivePlayer(sender, target)) {
-            plugin.sendMessage(sender, "&a" + target.getName() + " has been revived!");
+            plugin.sendMessage(sender, "&a" + prefix + target.getName() + suffix + " &ahas been revived!");
         } else {
             plugin.sendMessage(sender, "&c" + target.getName() + " isn't eliminated!");
         }

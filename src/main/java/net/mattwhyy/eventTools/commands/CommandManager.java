@@ -65,6 +65,7 @@ public class CommandManager implements TabExecutor {
         commands.put("mutechat", new MuteChatCommand(plugin));
         commands.put("clearchat", new ClearChatCommand(plugin));
         commands.put("list", new ListCommand(plugin));
+        commands.put("broadcast", new BroadcastCommand(plugin));
 
         // Zone commands
         commands.put("zone", new ZoneCommand(plugin));

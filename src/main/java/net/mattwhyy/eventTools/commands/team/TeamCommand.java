@@ -41,6 +41,8 @@ public class TeamCommand extends BaseCommand {
                 return new TeamInfoCommand(plugin).execute(sender, args);
             case "settings":
                 return new TeamSettingsCommand(plugin).execute(sender, args);
+            case "chat":
+                return new TeamChatCommand(plugin).execute(sender, args);
             default:
                 sendTeamHelp(sender);
                 return true;
@@ -54,6 +56,7 @@ public class TeamCommand extends BaseCommand {
             List<String> commands = new ArrayList<>();
             commands.add("join");
             commands.add("leave");
+            commands.add("chat");
 
             if (sender.hasPermission("eventtools.admin")) {
                 commands.addAll(Arrays.asList("create", "delete", "assign", "color", "info", "settings"));
@@ -83,7 +86,16 @@ public class TeamCommand extends BaseCommand {
                     if (sender.hasPermission("eventtools.admin")) return filterCompletions(plugin.teamManager.getTeamNames(), args[1]);
                     break;
                 case "assign":
-                    if (sender.hasPermission("eventtools.admin")) return filterCompletions(plugin.getOnlinePlayerNames(), args[1]);
+                    if (sender.hasPermission("eventtools.admin")) {
+                        List<String> assignCompletions = new ArrayList<>();
+                        assignCompletions.addAll(Arrays.asList("all", "alive", "eliminated"));
+                        assignCompletions.addAll(plugin.getOnlinePlayerNames());
+                        assignCompletions.addAll(plugin.teamManager.getTeamNames().stream()
+                                .map(name -> "@" + name)
+                                .collect(Collectors.toList()));
+                        String currentInput = args[1];
+                        return filterCompletions(assignCompletions, currentInput);
+                    }
                     break;
                 case "settings":
                     if (sender.hasPermission("eventtools.admin")) {
@@ -108,7 +120,7 @@ public class TeamCommand extends BaseCommand {
                 case "assign":
                     return filterCompletions(plugin.teamManager.getTeamNames(), args[2]);
                 case "settings":
-                    return filterCompletions(Arrays.asList("friendlyfire", "nametags", "collision"), args[2]);
+                    return filterCompletions(TeamSettingsCommand.ALL_PROPERTIES, args[2]);
             }
         }
         else if (args.length == 4 && sender.hasPermission("eventtools.admin") && args[0].equalsIgnoreCase("settings")) {
@@ -121,7 +133,8 @@ public class TeamCommand extends BaseCommand {
         if (!sender.hasPermission("eventtools.admin")) {
             plugin.sendMessage(sender, "&6Team Commands:\n" +
                     "&e/team join <team> &7- Join a team\n" +
-                    "&e/team leave &7- Leave a team\n");
+                    "&e/team leave &7- Leave a team\n" +
+                    "&e/team chat &7- Toggles team chat\n");
             return;
         }
         plugin.sendMessage(sender, "&6Team Commands:\n" +

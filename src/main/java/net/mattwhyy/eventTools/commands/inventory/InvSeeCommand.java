@@ -31,6 +31,8 @@ public class InvSeeCommand extends BaseCommand {
 
         Player target = targets.get(0);
         admin.openInventory(target.getInventory());
+
+
         plugin.sendMessage(sender, "&eViewing " + target.getName() + "'s inventory:");
         return true;
     }

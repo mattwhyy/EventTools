@@ -34,7 +34,7 @@ public class ZoneCreateCommand extends BaseCommand {
         try {
             String name = args[1];
             Shape shape = Shape.valueOf(args[2].toUpperCase());
-            int radius = Math.min(Integer.parseInt(args[3]), 50);
+            int radius = Math.min(Integer.parseInt(args[3]), 100);
             ZoneType type = ZoneType.valueOf(args[4].toUpperCase());
 
             List<PotionEffect> effects = new ArrayList<>();

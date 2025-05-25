@@ -32,13 +32,13 @@ public class ZoneResizeCommand extends BaseCommand {
 
         try {
             int newRadius = Integer.parseInt(args[2]);
-            newRadius = Math.min(newRadius, 50);
+            newRadius = Math.min(newRadius, 100);
 
             int stepCount = 1;
             if (args.length >= 4) {
-                stepCount = Math.min(Integer.parseInt(args[3]), 300);
+                stepCount = Math.min(Integer.parseInt(args[3]), 900);
                 if (stepCount <= 0) {
-                    plugin.sendMessage(sender, "&cStep count must be positive! (1-60)");
+                    plugin.sendMessage(sender, "&cStep count must be positive! (1-900)");
                     return true;
                 }
             }
