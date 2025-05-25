@@ -1,4 +1,4 @@
-# OneMace
+# EventTools
 ![Enviroment](https://img.shields.io/badge/Enviroment-Server-blue?logo=data%3Aimage%2Fpng%3Bbase64%2CiVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAABhWlDQ1BJQ0MgcHJvZmlsZQAAKJF9kT1Iw0AYht%2BmalUqDnYQEclQneyiIo6likWwUNoKrTqYXPoHTRqSFBdHwbXg4M9i1cHFWVcHV0EQ%2FAFxdnBSdJESv0sKLWI8uLuH97735e47QGhUmGp2RQFVs4xUPCZmc6ti4BU9CKCP1jGJmXoivZiB5%2Fi6h4%2FvdxGe5V335xhQ8iYDfCJxlOmGRbxBPLtp6Zz3iUOsJCnE58STBl2Q%2BJHrsstvnIsOCzwzZGRS88QhYrHYwXIHs5KhEs8QhxVVo3wh67LCeYuzWqmx1j35C4N5bSXNdZqjiGMJCSQhQkYNZVRgIUK7RoqJFJ3HPPwjjj9JLplcZTByLKAKFZLjB%2F%2BD3701C9NTblIwBnS%2F2PbHOBDYBZp12%2F4%2Btu3mCeB%2FBq60tr%2FaAOY%2BSa%2B3tfARMLgNXFy3NXkPuNwBhp90yZAcyU9TKBSA9zP6phwwdAv0r7l9a53j9AHIUK%2BWb4CDQ2CiSNnrHu%2Fu7ezbvzWt%2Fv0ATphymIBZ6aQAAAAGYktHRAAKAAwAGd6C8noAAAAJcEhZcwAADdcAAA3XAUIom3gAAAAHdElNRQfoBgcOHRYlcgoRAAABRklEQVR42u2YMUoDQRRAX0axUzCteIZ4hKn0FDmFhalSWKkgnkHt9AQWwhzBNr2tBGNno82ACwm6EZvxvwdTzP8s7P8zu8w8EJHIDABKKfvAFXAIbP%2Fzmt%2BAR2CSc54NavFPwDDY4s%2BBUaorPwy4%2B3eBy1S3fVSOUoBv%2Fjt2UmMv%2FA6cAHt1TGqsb36JzcYaMM05X3Tm56UUgLOe%2BSVa2wE3K2LXa%2BSbb8BgRWxjjXzzDRj%2FEBv3fOarY6WUj8Z%2BglPgtlPcKbDVM998A%2F6cVM%2FGUXlN9WIQlYdUDwvzgMW%2FAMcp5zwDRsA9sAhQ%2BAK4Aw5yzs8aEZHY6AR1gjpBnaBOsLHrsE6wM9cJohPUCeoE0Qn%2BHp0gOkGdoE5QRMKiE9QJ6gR1gjrBxq7DOsHOXCeITlAnqBNEJ%2Fh7dILoBHWCOkERCcsncuextWq5TzoAAAAASUVORK5CYII%3D&color=blue)
 ![Versions](https://img.shields.io/modrinth/game-versions/eventtools?&label=Versions&color=%23249141)
 
@@ -12,7 +12,68 @@
 
 **EventTools** is the **perfect solution** for anything **event** related. Whether its a simple **100 Players Event**, a **Minigame Event** or even a **Competetive Event**, this plugin has got you covered!
 
-The plugin features **player elimination, reviving, voting systems, timed effects, custom kits, chat controls, and fireworks celebrations.** With commands like **/startevent, /eliminate, /revive, /numberguess**, and **PlaceholderAPI support**, it's perfect for tournaments, PvP games, or minigames.
+## Features
+
+### Event Management
+- **Start/Stop Events** with optional custom titles  
+  `/startevent [title]`, `/stopevent`
+- **Player Elimination System** with automatic gamemode switching
+- **Revive Players** individually or entire groups
+  `/revive <player|all|alive|eliminated|@team>`
+- **Optional Event Spawn Point**  
+  `/seteventspawn`
+- **Team Events Support** including FFA and hybrid modes
+  `/team`
+- **Zone Creation & Management** for arenas  
+  `/zone`
+
+### Player Control & Moderation
+- **Freeze/Unfreeze Players** instantly  
+  `/freeze <player|all|alive|eliminated|@team>`
+- **Teleport Players or Groups**  
+  `/bring <player|all|alive|eliminated|@team>`
+- **Heal Players** quickly  
+  `/heal <player|all|alive|eliminated|@team>`
+- **Gamemode Switching**  
+  `/changegamemode <gamemode> <player|all|alive|eliminated|@team>`
+- **Apply Timed Effects**  
+  `/timedeffect <effect> <seconds> <player|all|alive|eliminated|@team>`
+
+### Gameplay Enhancements
+- **Custom Kits System** with gear and effects  
+  `/kit <kitName> <player|all|alive|eliminated|@team>`
+- **Inventory Tools**:  
+  - View: `/invsee <player>`  
+  - Clear: `/clearinventory <player|all|alive|eliminated|@team>`  
+  - Give Items: `/giveitem <player|all|alive|eliminated|@team> [amount]`
+- **Visual Countdown Timer**  
+  `/countdown <seconds>`
+- **Number Guessing Game** with automatic winner detection  
+  `/numberguess <maxNumber>`
+
+### Voting & Player Interaction
+- **Yes/No Voting System**  
+  `/startvote <question>`, `/endvote`
+- **Chat Controls**:  
+  - Mute Chat: `/mutechat`  
+  - Clear Chat: `/clearchat`
+- **Team Chat System** with staff spy mode
+- **Broadcast Messages** with formatting support  
+  `/broadcast <message>`
+
+### Competitive Tools
+- **Automatic Placement Tracking** with Top 5 announcements
+- **Zone Management** for defining event boundaries
+- **Discord Integration** via DiscordSRV
+- **PlaceholderAPI Support** for UI and scoreboard integration
+
+### Technical & Compatibility
+- **Vault Compatibility** for chat prefixes and permissions
+- **Multi-Server Support** *(Spigot, Paper, Purpur)*
+- **Performance Optimized** for large-scale events
+- **Fully Configurable** via config
+## Wiki
+The **wiki for the plugin** is available [here](https://github.com/mattwhyy/EventTools/wiki).
 ## Commands
 The **full list of commands** is available [here](https://github.com/mattwhyy/EventTools/wiki/Commands).
 ## Placeholders
@@ -24,10 +85,23 @@ settings:
 messages:
   event-start-title: "§6Event started!"
   event-start-subtitle: "§eGood luck!"
-  event-started: "&6&lEVENT STARTED! &eEliminations are now active."
   event-end-title: "§aEvent ended!"
   event-end-subtitle: "§7Thanks for playing!"
-  event-ended: "&a&lEVENT ENDED!"
+discord:
+  # Requires DiscordSRV!
+  enabled: true
+  channels:
+    announcements: "123456789012345678" # Replace with your channel ID
+  messages:
+    event-start-desc: "An event has started!"
+    event-end-desc: "The event has ended!"
+  colors:
+    event-start: "#00FF00"
+    event-end: "#FF0000"
+    event-results: "#FFA500"
+    event-other-placements: "#C4C4C4"
+    warning: "#FFFF00"
+    info: "#0099FF"
 kits:
   starter:
     clear-inventory: true
@@ -45,7 +119,6 @@ kits:
         duration: 300
         amplifier: 1
     heal: true
-
   archer:
     clear-inventory: true
     armor:
