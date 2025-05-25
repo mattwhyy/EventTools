@@ -73,7 +73,7 @@
 - **Performance Optimized** for large-scale events
 - **Fully Configurable** via config
 ## Wiki
-The wiki for the plugin is available [here](https://github.com/mattwhyy/EventTools/wiki).
+The **wiki for the plugin** is available [here](https://github.com/mattwhyy/EventTools/wiki).
 ## Commands
 The **full list of commands** is available [here](https://github.com/mattwhyy/EventTools/wiki/Commands).
 ## Placeholders
