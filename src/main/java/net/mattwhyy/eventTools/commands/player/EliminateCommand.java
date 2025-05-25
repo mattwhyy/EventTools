@@ -44,8 +44,15 @@ public class EliminateCommand extends BaseCommand {
         }
 
         Player target = plugin.getServer().getPlayer(args[0]);
+
+
         if (target == null) {
             plugin.sendMessage(sender, "&cPlayer not found!");
+            return true;
+        }
+
+        if (plugin.isEliminated(target)) {
+            plugin.sendMessage(sender, "&c" + target.getName() + " is already eliminated!");
             return true;
         }
 
