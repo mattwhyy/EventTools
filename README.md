@@ -12,40 +12,40 @@
 
 **EventTools** is the **perfect solution** for anything **event** related. Whether its a simple **100 Players Event**, a **Minigame Event** or even a **Competetive Event**, this plugin has got you covered!
 
-## 🔧 Features
+## Features
 
 ### Event Management
 - **Start/Stop Events** with optional custom titles  
   `/startevent [title]`, `/stopevent`
 - **Player Elimination System** with automatic gamemode switching
-- **Revive Players** individually or all at once  
-  `/revive <player|all>`
-- **Custom Event Spawn Point**  
+- **Revive Players** individually or entire groups
+  `/revive <player|all|alive|eliminated|@team>`
+- **Optional Event Spawn Point**  
   `/seteventspawn`
-- **Team Events Support** including FFA and hybrid modes  
+- **Team Events Support** including FFA and hybrid modes
   `/team`
 - **Zone Creation & Management** for arenas  
   `/zone`
 
 ### Player Control & Moderation
 - **Freeze/Unfreeze Players** instantly  
-  `/freeze <player|all|alive|eliminated>`
+  `/freeze <player|all|alive|eliminated|@team>`
 - **Teleport Players or Groups**  
-  `/bring <player|all|alive|eliminated>`
+  `/bring <player|all|alive|eliminated|@team>`
 - **Heal Players** quickly  
-  `/heal <player|all|alive|eliminated>`
+  `/heal <player|all|alive|eliminated|@team>`
 - **Gamemode Switching**  
-  `/changegamemode <gamemode> <player|all|alive|eliminated>`
+  `/changegamemode <gamemode> <player|all|alive|eliminated|@team>`
 - **Apply Timed Effects**  
-  `/timedeffect <effect> <seconds> <player|all|alive|eliminated>`
+  `/timedeffect <effect> <seconds> <player|all|alive|eliminated|@team>`
 
 ### Gameplay Enhancements
 - **Custom Kits System** with gear and effects  
-  `/kit <kitName> <player|all|alive|eliminated>`
+  `/kit <kitName> <player|all|alive|eliminated|@team>`
 - **Inventory Tools**:  
   - View: `/invsee <player>`  
-  - Clear: `/clearinventory <player|all|alive|eliminated>`  
-  - Give Items: `/giveitem <player|all|alive|eliminated> [amount]`
+  - Clear: `/clearinventory <player|all|alive|eliminated|@team>`  
+  - Give Items: `/giveitem <player|all|alive|eliminated|@team> [amount]`
 - **Visual Countdown Timer**  
   `/countdown <seconds>`
 - **Number Guessing Game** with automatic winner detection  
@@ -64,14 +64,14 @@
 ### Competitive Tools
 - **Automatic Placement Tracking** with Top 5 announcements
 - **Zone Management** for defining event boundaries
-- **Discord Integration** *(via DiscordSRV)*
+- **Discord Integration** via DiscordSRV
 - **PlaceholderAPI Support** for UI and scoreboard integration
 
 ### Technical & Compatibility
 - **Vault Compatibility** for chat prefixes and permissions
 - **Multi-Server Support** *(Spigot, Paper, Purpur)*
 - **Performance Optimized** for large-scale events
-- **Fully Configurable** messages, kits, and logic via config files
+- **Fully Configurable** via config
 ## Wiki
 The wiki for the plugin is available [here](https://github.com/mattwhyy/EventTools/wiki).
 ## Commands
