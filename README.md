@@ -12,7 +12,68 @@
 
 **EventTools** is the **perfect solution** for anything **event** related. Whether its a simple **100 Players Event**, a **Minigame Event** or even a **Competetive Event**, this plugin has got you covered!
 
-The plugin features **player elimination, reviving, voting systems, timed effects, custom kits, chat controls, and fireworks celebrations.** With commands like **/startevent, /eliminate, /revive, /numberguess**, and **PlaceholderAPI support**, it's perfect for tournaments, PvP games, or minigames.
+## 🔧 Features
+
+### Event Management
+- **Start/Stop Events** with optional custom titles  
+  `/startevent [title]`, `/stopevent`
+- **Player Elimination System** with automatic gamemode switching
+- **Revive Players** individually or all at once  
+  `/revive <player|all>`
+- **Custom Event Spawn Point**  
+  `/seteventspawn`
+- **Team Events Support** including FFA and hybrid modes  
+  `/team`
+- **Zone Creation & Management** for arenas  
+  `/zone`
+
+### Player Control & Moderation
+- **Freeze/Unfreeze Players** instantly  
+  `/freeze <player|all|alive|eliminated>`
+- **Teleport Players or Groups**  
+  `/bring <player|all|alive|eliminated>`
+- **Heal Players** quickly  
+  `/heal <player|all|alive|eliminated>`
+- **Gamemode Switching**  
+  `/changegamemode <gamemode> <player|all|alive|eliminated>`
+- **Apply Timed Effects**  
+  `/timedeffect <effect> <seconds> <player|all|alive|eliminated>`
+
+### Gameplay Enhancements
+- **Custom Kits System** with gear and effects  
+  `/kit <kitName> <player|all|alive|eliminated>`
+- **Inventory Tools**:  
+  - View: `/invsee <player>`  
+  - Clear: `/clearinventory <player|all|alive|eliminated>`  
+  - Give Items: `/giveitem <player|all|alive|eliminated> [amount]`
+- **Visual Countdown Timer**  
+  `/countdown <seconds>`
+- **Number Guessing Game** with automatic winner detection  
+  `/numberguess <maxNumber>`
+
+### Voting & Player Interaction
+- **Yes/No Voting System**  
+  `/startvote <question>`, `/endvote`
+- **Chat Controls**:  
+  - Mute Chat: `/mutechat`  
+  - Clear Chat: `/clearchat`
+- **Team Chat System** with optional staff spy mode (configurable)
+- **Broadcast Messages** with formatting support  
+  `/broadcast <message>`
+
+### Competitive Tools
+- **Automatic Placement Tracking** with Top 5 announcements
+- **Zone Management** for defining event boundaries
+- **Discord Integration** *(via DiscordSRV)*
+- **PlaceholderAPI Support** for UI and scoreboard integration
+
+### Technical & Compatibility
+- **Vault Compatibility** for chat prefixes and permissions
+- **Multi-Server Support** *(Spigot, Paper, Purpur)*
+- **Performance Optimized** for large-scale events
+- **Fully Configurable** messages, kits, and logic via config files
+## Wiki
+The wiki for the plugin is available [here](https://github.com/mattwhyy/EventTools/wiki).
 ## Commands
 The **full list of commands** is available [here](https://github.com/mattwhyy/EventTools/wiki/Commands).
 ## Placeholders
@@ -24,10 +85,23 @@ settings:
 messages:
   event-start-title: "§6Event started!"
   event-start-subtitle: "§eGood luck!"
-  event-started: "&6&lEVENT STARTED! &eEliminations are now active."
   event-end-title: "§aEvent ended!"
   event-end-subtitle: "§7Thanks for playing!"
-  event-ended: "&a&lEVENT ENDED!"
+discord:
+  # Requires DiscordSRV!
+  enabled: true
+  channels:
+    announcements: "123456789012345678" # Replace with your channel ID
+  messages:
+    event-start-desc: "An event has started!"
+    event-end-desc: "The event has ended!"
+  colors:
+    event-start: "#00FF00"
+    event-end: "#FF0000"
+    event-results: "#FFA500"
+    event-other-placements: "#C4C4C4"
+    warning: "#FFFF00"
+    info: "#0099FF"
 kits:
   starter:
     clear-inventory: true
@@ -45,7 +119,6 @@ kits:
         duration: 300
         amplifier: 1
     heal: true
-
   archer:
     clear-inventory: true
     armor:
