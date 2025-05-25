@@ -57,7 +57,7 @@
 - **Chat Controls**:  
   - Mute Chat: `/mutechat`  
   - Clear Chat: `/clearchat`
-- **Team Chat System** with optional staff spy mode (configurable)
+- **Team Chat System** with staff spy mode
 - **Broadcast Messages** with formatting support  
   `/broadcast <message>`
 
